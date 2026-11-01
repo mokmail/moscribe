@@ -119,7 +119,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           ./packaging/macos/make_dmg.sh "${{ steps.ver.outputs.value }}"
-          ditto -c -k --sequesterRsrc --keepParent bin "dist/moscribe-${{ matrix.tag }}-bin.zip"
+          ( cd bin && zip -q -r "../dist/moscribe-${{ matrix.tag }}-bin.zip" . )
 
       - name: Package — Linux
         if: runner.os == 'Linux'

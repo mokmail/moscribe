@@ -12,7 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 https://github.com/microsoft/VibeASR.cpp /src
+# llama.cpp and gguf-py are submodules: a shallow clone without them leaves
+# 3rdparty/llama.cpp empty and cmake dies on add_subdirectory
+RUN git clone --depth 1 https://github.com/microsoft/VibeASR.cpp /src \
+    && cd /src \
+    && git submodule update --init --recursive --depth 1
 WORKDIR /src
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF \
     && cmake --build build --target asr_stream_server -j"$(nproc)" \

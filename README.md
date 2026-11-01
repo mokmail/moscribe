@@ -135,12 +135,17 @@ Building the native engines from scratch is covered in [docs/BUILD.md](docs/BUIL
 
 ### First run: the models
 
-The app ships without weights — they would triple the installer size.
+The app ships without weights — they would triple the installer size. **Starting the
+app fetches them automatically** if they are missing; the command below does the same
+thing on demand, with a progress bar:
 
 ```bash
 moscribe --fetch-models      # ~2.8 GB, resumable, straight from Hugging Face
 moscribe --check             # confirm every binary and model is found
 ```
+
+`--fetch-models` also pulls the engine binaries for your platform from this project's
+releases when they are absent (a few MB), so a `pip install` needs nothing else.
 
 | Model | Purpose | Size |
 | --- | --- | --- |

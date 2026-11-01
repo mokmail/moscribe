@@ -27,6 +27,7 @@ dependencies = [
   "numpy>=1.24",
   "onnxruntime>=1.17",
   "psutil>=5.9",
+  "certifi>=2023.7",
 ]
 
 [project.optional-dependencies]

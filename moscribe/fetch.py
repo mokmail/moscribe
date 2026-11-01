@@ -6,6 +6,8 @@ resume via `.part` files, so an interrupted 950 MB fetch is not wasted.
 from __future__ import annotations
 
 import os
+import shutil
+import ssl
 import sys
 import urllib.error
 import urllib.request
@@ -55,6 +57,16 @@ def human(n: float) -> str:
     return f"{n:.1f} GB"
 
 
+def _ssl_context() -> ssl.SSLContext:
+    """Framework Pythons (macOS, some Windows installs) ship no CA bundle."""
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001 - fall back to the platform store
+        return ssl.create_default_context()
+
+
 def _download(url: str, dest: Path, label: str) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_suffix(dest.suffix + ".part")
@@ -63,7 +75,7 @@ def _download(url: str, dest: Path, label: str) -> None:
     if have:
         req.add_header("Range", f"bytes={have}-")
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as r:
             total = int(r.headers.get("Content-Length") or 0) + have
             mode = "ab" if have and r.status == 206 else "wb"
             if mode == "wb":
@@ -128,7 +140,21 @@ def fetch_binaries() -> bool:
         print("  (no published bundle for this platform — build from source, see docs/BUILD.md)")
         return False
     with zipfile.ZipFile(tmp) as z:
-        z.extractall(dest)
+        staging = dest / "_unpack"
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=True)
+        z.extractall(staging)
+        # archives arrive either flat or wrapped in a single folder; handle both
+        entries = list(staging.iterdir())
+        root = entries[0] if len(entries) == 1 and entries[0].is_dir() else staging
+        for item in root.iterdir():
+            target = dest / item.name
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+            elif target.exists():
+                target.unlink()
+            shutil.move(str(item), str(target))
+        shutil.rmtree(staging, ignore_errors=True)
     tmp.unlink(missing_ok=True)
     for f in dest.iterdir():
         if not f.name.endswith(".zip"):

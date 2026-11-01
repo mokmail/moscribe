@@ -89,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--check", action="store_true", help="report binaries and models, then exit")
     ap.add_argument("--fetch-models", action="store_true", help="download models, then exit")
+    ap.add_argument("--no-fetch", action="store_true",
+                    help="do not download missing models/binaries on start")
     ap.add_argument("--version", action="store_true")
     args = ap.parse_args(argv)
 
@@ -117,11 +119,26 @@ def main(argv: list[str] | None = None) -> int:
         for n in notes:
             print(f"  ! {n}")
         return 0 if ok else 1
+    auto_fetch = os.environ.get("MOSCRIBE_AUTO_FETCH", "1").lower() not in ("0", "false", "no", "off")
+    if not ok and auto_fetch and not args.no_fetch:
+        print(f"\n  {APP_NAME} is missing its models or engines — downloading them once.")
+        for n in notes:
+            print(f"    · {n}")
+        from moscribe.fetch import main as fetch_main
+
+        try:
+            fetch_main([])
+        except SystemExit:
+            pass
+        except Exception as exc:  # noqa: BLE001 - never block the UI on a download
+            print(f"    ! download failed: {type(exc).__name__}: {exc}")
+        ok, notes = _status()
+
     if not ok:
         print(f"{APP_NAME}: setup is incomplete", file=sys.stderr)
         for n in notes:
             print(f"  ! {n}", file=sys.stderr)
-        print("\n  run: moscribe --fetch-models\n", file=sys.stderr)
+        print("\n  retry the download with: moscribe --fetch-models\n", file=sys.stderr)
 
     paths.ensure_dirs()
     port = _free_port(args.host, args.port) if args.port else _free_port(args.host, DEFAULT_PORT)
