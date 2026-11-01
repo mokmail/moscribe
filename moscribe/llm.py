@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .paths import APP_DIR, DATA_DIR, bin_dir, exe, models_dir  # noqa: E402  (local module)
+from .paths import APP_DIR, DATA_DIR, bin_dir, exe, find_exe, models_dir  # noqa: E402
 
 ROOT = APP_DIR
 MODELS_DIR = models_dir() / "llm"
@@ -93,7 +93,7 @@ class LLM:
     DEFAULTS = {
         "model": "",            # empty -> DEFAULT_MODEL
         "threads": 0,           # 0 -> min(8, cpu)
-        "ctx": 4096,
+        "ctx": 8192,
         "temperature": 0.30,
         "max_tokens": 700,
         "repeat_penalty": 1.08,
@@ -110,6 +110,15 @@ class LLM:
         self._env_model = Path(os.environ["VIBESCRIBE_LLM_MODEL"]) if os.environ.get("VIBESCRIBE_LLM_MODEL") else None
         self._default_model = model or DEFAULT_MODEL
         self._load_config()
+
+    def resolve_binary(self) -> Path:
+        """Re-check on demand: a first-run download lands after import."""
+        if self.binary.exists():
+            return self.binary
+        found = find_exe("llama-server")
+        if found:
+            self.binary = found
+        return self.binary
 
     # -- configuration -----------------------------------------------------
     def _load_config(self) -> None:
@@ -192,8 +201,8 @@ class LLM:
         return {
             "ok": self._ready(),
             "running": alive,
-            "binary": str(self.binary),
-            "binary_ok": self.binary.exists(),
+            "binary": str(self.resolve_binary()),
+            "binary_ok": self.resolve_binary().exists(),
             "model": str(self.model),
             "model_ok": self.model.exists(),
             "model_mb": round(self.model.stat().st_size / 1e6, 1) if self.model.exists() else 0,
@@ -220,6 +229,7 @@ class LLM:
                     if not self._ready():
                         break
                     await asyncio.sleep(0.2)
+            self.resolve_binary()
             if not self.binary.exists() or not self.model.exists():
                 self._last_error = ("llama-server or GGUF missing — build "
                                     "~/apps/VibeASR.cpp (LLAMA_BUILD_SERVER=ON) and fetch "

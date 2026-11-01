@@ -54,7 +54,9 @@ def _status() -> tuple[bool, list[str]]:
     notes: list[str] = []
     ok = True
     try:
-        from moscribe.asr_engine import BIN, LM_MODEL, VAE_MODEL
+        from moscribe.asr_engine import LM_MODEL, VAE_MODEL, resolve_bin
+
+        BIN = resolve_bin()
     except Exception as exc:  # noqa: BLE001 - a broken import is itself the problem
         return False, [f"engine module failed to load: {type(exc).__name__}: {exc}"]
 
@@ -67,14 +69,16 @@ def _status() -> tuple[bool, list[str]]:
             notes.append(f"missing model: {label} ({path.name})")
 
     try:
-        from moscribe.llm import DEFAULT_BIN, DEFAULT_MODEL
+        from moscribe.llm import LLM_ENGINE
 
-        if not DEFAULT_BIN.exists():
+        # ask the live engine: it already applies VIBESCRIBE_LLM_BIN / model config
+        binary, model = LLM_ENGINE.resolve_binary(), LLM_ENGINE.model
+        if not binary.exists():
             ok = False
-            notes.append(f"missing binary: llama-server (expected {DEFAULT_BIN})")
-        if not DEFAULT_MODEL.exists():
+            notes.append(f"missing binary: llama-server (expected {binary})")
+        if not model.exists():
             ok = False
-            notes.append(f"missing model: text model ({DEFAULT_MODEL.name})")
+            notes.append(f"missing model: text model ({model.name})")
     except Exception as exc:  # noqa: BLE001
         ok = False
         notes.append(f"text engine failed to load: {type(exc).__name__}")

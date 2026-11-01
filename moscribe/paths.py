@@ -83,7 +83,13 @@ def exe(name: str) -> str:
 
 
 def _migrate_dev_data() -> None:
-    """A checkout used to keep history beside the code; carry it over once."""
+    """A checkout used to keep history beside the code; carry it over once.
+
+    Only for the default user directory: an explicit MOSCRIBE_DATA is a deliberate
+    choice (tests, containers, a second profile) and must start clean.
+    """
+    if os.environ.get("MOSCRIBE_DATA") or os.environ.get("VIBESCRIBE_DATA"):
+        return
     legacy = APP_DIR.parent / "data"
     if not legacy.exists() or legacy == DATA_DIR:
         return
@@ -104,6 +110,15 @@ def _migrate_dev_data() -> None:
                     shutil.copytree(job, target)
         except OSError:
             pass
+
+
+def find_exe(name: str) -> Path | None:
+    """Locate an engine binary: bundled bin/ first, then the user data copy."""
+    for base in (bin_dir(), DATA_DIR / "bin"):
+        candidate = base / exe(name)
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def ensure_dirs() -> None:

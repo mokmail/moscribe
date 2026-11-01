@@ -38,7 +38,7 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(raw).expanduser() if raw else default
 
 
-from .paths import APP_DIR, DATA_DIR, bin_dir, exe, models_dir  # noqa: E402  (local module)
+from .paths import APP_DIR, DATA_DIR, bin_dir, exe, find_exe, models_dir  # noqa: E402
 
 _LEGACY_ROOT = Path.home() / "apps" / "VibeASR.cpp"
 
@@ -51,6 +51,17 @@ _BIN_CANDIDATES = [
     _LEGACY_ROOT / "build" / "bin" / "asr_stream_server",
 ]
 BIN = next((c for c in _BIN_CANDIDATES if c and c.exists()), _BIN_CANDIDATES[1])
+
+
+def resolve_bin() -> Path:
+    """Re-check on demand: a first-run download lands after import."""
+    if BIN.exists():
+        return BIN
+    found = find_exe("asr_stream_server")
+    if found:
+        return found
+    legacy = _LEGACY_ROOT / "build" / "bin" / "asr_stream_server"
+    return legacy if legacy.exists() else BIN
 
 _MODEL_CANDIDATES = [
     Path(os.environ["VIBEASR_MODELS"]).expanduser() if os.environ.get("VIBEASR_MODELS") else None,
