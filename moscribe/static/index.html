@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>MoScribe · kmail</title>
+<link rel="stylesheet" href="/static/styles.css" />
+<link rel="icon" type="image/png" sizes="32x32" href="/static/brand/favicon-32.png" />
+<link rel="apple-touch-icon" href="/static/brand/apple-touch-icon.png" />
+<meta name="theme-color" content="#f5f7f4" />
+<meta name="description" content="MoScribe — local speech to text with speaker separation and on-device summaries. kmail brand, runs on this machine." />
+</head>
+<body>
+<div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+
+<header class="topbar">
+  <div class="brand">
+    <img class="brandMark" src="/static/brand/logo-mark-114.png" srcset="/static/brand/logo-mark-76.png 2x, /static/brand/logo-mark-114.png 3x" alt="kmail" width="38" height="38" />
+    <div class="brandText">
+      <h1>Mo<span>Scribe</span></h1>
+      <p>kmail · speech to text, on this machine</p>
+    </div>
+  </div>
+
+  <div class="statusRow">
+    <span class="pill" id="pillEngine" data-state="unknown" title="Inference engine"><i></i><b>engine</b><em>…</em></span>
+    <span class="pill" id="pillSpeakers" data-state="unknown" title="Speaker embedding model"><i></i><b>speakers</b><em>…</em></span>
+    <span class="pill" id="pillRtf" data-state="idle" title="Real-time factor"><i></i><b>speed</b><em>—</em></span>
+    <span class="pill" id="pillAI" data-state="unknown" title="Local text model (BitNet b1.58 2B)"><i></i><b>text</b><em>…</em></span>
+    <span class="finishChip" id="finishChip" hidden>
+      <i class="ring" aria-hidden="true"></i>
+      <span>transcribing</span>
+      <b class="dots" aria-hidden="true"><em>.</em><em>.</em><em>.</em></b>
+    </span>
+    <span class="pill" id="pillPrompt" data-state="idle" title="Prompt / context applied to the next transcription"><i></i><b>prompt</b><em>none</em></span>
+  </div>
+
+  <div class="topActions">
+    <button class="iconBtn" id="openHelp" title="How MoScribe works" aria-label="Help and about">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M9.2 9.3a2.9 2.9 0 1 1 4 2.7c-.8.4-1.2 1-1.2 1.9v.3"/><circle cx="12" cy="17.4" r=".9" fill="currentColor" stroke="none"/></svg>
+    </button>
+    <button class="iconBtn" id="openHistory" title="History" aria-label="History">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>
+    </button>
+    <button class="iconBtn" id="openSettings" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="shell">
+
+  <aside class="rail">
+
+    <div class="segmented" role="tablist">
+      <button role="tab" class="seg active" data-mode="live" aria-selected="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        Live
+      </button>
+      <button role="tab" class="seg" data-mode="file" aria-selected="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4m0 0L8 8m4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        Upload
+      </button>
+    </div>
+
+    <section class="panel livePanel" id="livePanel">
+      <button class="orb" id="micBtn" aria-label="Start recording">
+        <span class="orbGlow" aria-hidden="true"></span>
+        <span class="orbFluid" aria-hidden="true"><i></i><i></i><i></i></span>
+        <img class="orbLogo" src="/static/brand/logo-mark-152.png" alt="" aria-hidden="true" />
+        <span class="orbBadge" aria-hidden="true">
+          <svg class="icoMic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+          <svg class="icoStop" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2.5"/></svg>
+        </span>
+      </button>
+      <div class="liveMeta">
+        <strong id="micTime">00:00</strong>
+        <span id="micHint">Tap the mic and start talking</span>
+      </div>
+      <div class="levelRow">
+        <span class="levelLabel">input</span>
+        <div class="levelBar"><div class="levelFill" id="levelFill"></div></div>
+        <span class="levelVal" id="levelVal">—</span>
+      </div>
+    </section>
+
+    <section class="panel filePanel hidden" id="filePanel">
+      <label class="drop" id="dropZone">
+        <input type="file" id="fileInput" accept="audio/*,video/*,.wav,.mp3,.m4a,.flac,.ogg,.aac,.webm,.mp4,.mov" hidden />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 15V4m0 0L8 8m4-4 4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+        <strong>Drop an audio or video file</strong>
+        <span>wav · mp3 · m4a · flac · ogg · mp4 — or click to browse</span>
+      </label>
+      <div class="fileCard hidden" id="fileCard">
+        <div class="fcTop">
+          <span class="fcName" id="fileName">file.wav</span>
+          <button class="ghostBtn" id="clearFile" aria-label="Remove file">✕</button>
+        </div>
+        <div class="fcMeta" id="fileMeta">—</div>
+        <div class="progress"><div class="progressFill" id="progressFill"></div></div>
+        <div class="fcRow">
+          <span id="jobProgress">ready</span>
+          <button class="primaryBtn" id="transcribeBtn">Transcribe</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panelHead">
+        <h2>Speakers</h2>
+        <button class="switch" id="spkToggle" role="switch" aria-checked="true" aria-label="Separate speakers"><span></span></button>
+      </div>
+      <p class="fine" id="spkNote">Voices are embedded with WeSpeaker ResNet34 and clustered, so each person gets their own line.</p>
+      <div class="field" id="spkFields">
+        <div class="fieldRow">
+          <span class="fieldLabel">Sensitivity</span>
+          <output id="sensVal">balanced</output>
+        </div>
+        <input type="range" id="sens" min="0.60" max="0.92" step="0.01" value="0.78" />
+        <div class="fieldRow">
+          <span class="fieldLabel">Max speakers</span>
+          <output id="maxSpkVal">6</output>
+        </div>
+        <input type="range" id="maxSpk" min="2" max="8" step="1" value="6" />
+      </div>
+    </section>
+
+    <section class="panel vitals" aria-label="Machine load">
+      <div class="panelHead">
+        <h2>Machine</h2>
+        <span class="vTag" id="vTag"><i></i>live</span>
+      </div>
+      <div class="vRow" data-kind="cpu">
+        <span class="vName">CPU</span>
+        <svg class="spark" id="sparkCpu" viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true">
+          <path class="sparkFill" d=""></path>
+          <path class="sparkLine" d=""></path>
+        </svg>
+        <output class="vVal" id="vCpu">—</output>
+      </div>
+      <div class="vRow" data-kind="ram">
+        <span class="vName">RAM</span>
+        <svg class="spark" id="sparkRam" viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true">
+          <path class="sparkFill" d=""></path>
+          <path class="sparkLine" d=""></path>
+        </svg>
+        <output class="vVal" id="vRam">—</output>
+      </div>
+      <p class="vSub" id="vSub">sampling…</p>
+    </section>
+
+    <div class="railActions">
+      <button class="ghostBtn wide" id="copyBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"/></svg>
+        Copy
+      </button>
+      <div class="splitBtn">
+        <button class="ghostBtn" id="exportBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4v11m0 0 4-4m-4 4-4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+          Export
+        </button>
+        <button class="ghostBtn caret" id="exportMenuBtn" aria-label="Export options">▾</button>
+      </div>
+      <button class="ghostBtn wide danger" id="clearBtn">New session</button>
+    </div>
+  </aside>
+
+  <section class="stage">
+    <div class="stageHead">
+      <div class="stageTitle">
+        <h2 id="docTitle">Untitled session</h2>
+        <p id="docMeta">Nothing transcribed yet</p>
+      </div>
+      <div class="stageTools">
+        <div class="searchBox">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+          <input id="search" type="search" placeholder="Search transcript" />
+        </div>
+      </div>
+    </div>
+
+    <div class="aiBar" id="aiBar">
+      <span class="aiLabel">AI</span>
+      <button class="aiBtn" data-ai="summarize">Summarize</button>
+      <button class="aiBtn" data-ai="minutes">Minutes</button>
+      <button class="aiBtn" data-ai="actions">Action items</button>
+      <button class="aiBtn" data-ai="rewrite">Clean up</button>
+      <button class="aiBtn" data-ai="translate_en" title="Translate the transcript (experimental at 2.4B)">→ EN</button>
+      <button class="aiBtn" data-ai="translate_de" title="Translate the transcript — experimental, quality is rough at 2.4B">→ DE</button>
+      <button class="aiBtn" id="aiCustomBtn">Custom…</button>
+      <input id="aiCustomInput" class="aiCustomInput hidden" placeholder="Ask something about the transcript…" />
+      <button class="aiBtn stop hidden" id="aiStop">Stop</button>
+      <span class="aiStatus" id="aiStatus"></span>
+    </div>
+
+    <div class="legend hidden" id="legend"></div>
+
+    <div class="transcript" id="transcript" tabindex="0">
+      <div class="empty" id="emptyState">
+        <div class="emptyArt" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <h3>Your words, on your machine</h3>
+        <p>Press the mic for live dictation, or upload a recording. Audio never leaves this computer — inference runs on the CPU next to you.</p>
+        <div class="emptyKeys">
+          <span><kbd>Space</kbd> start / stop</span>
+          <span><kbd>Esc</kbd> finish</span>
+          <span><kbd>⌘⇧C</kbd> copy</span>
+        </div>
+      </div>
+    </div>
+
+    <footer class="stageFoot">
+      <div class="stats">
+        <span id="statWords">0 words</span>
+        <span id="statChars">0 chars</span>
+        <span id="statSpeakers">0 speakers</span>
+        <span id="statTime">—</span>
+      </div>
+      <div class="footHint" id="footHint">idle</div>
+    </footer>
+  </section>
+
+  <aside class="aiPanel" id="aiPanel" aria-hidden="true">
+    <header class="aiCardHead">
+      <strong id="aiTitle">Summary</strong>
+      <div class="aiCardActions">
+        <button class="ghostBtn tiny" id="aiShare" title="Export or share this result">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15V4m0 0L8 8m4-4 4 4"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>
+          Share
+        </button>
+        <button class="iconBtn tiny" id="aiClose" aria-label="Close">✕</button>
+      </div>
+    </header>
+    <div class="aiBody" id="aiBody"></div>
+    <footer class="aiFoot"><span id="aiMeta"></span></footer>
+  </aside>
+</main>
+
+<div class="scrim" id="scrim"></div>
+
+<aside class="drawer" id="settingsDrawer" aria-hidden="true">
+  <div class="drawerHead">
+    <h2>Settings</h2>
+    <button class="iconBtn" data-close aria-label="Close">✕</button>
+  </div>
+
+  <div class="tabBar" role="tablist" aria-label="Settings sections">
+    <button class="drawerTab active" role="tab" data-tab="prompt" aria-selected="true">Prompt</button>
+    <button class="drawerTab" role="tab" data-tab="recognition" aria-selected="false">Recognition</button>
+    <button class="drawerTab" role="tab" data-tab="model" aria-selected="false">Model</button>
+    <button class="drawerTab" role="tab" data-tab="about" aria-selected="false">About</button>
+  </div>
+
+  <div class="drawerBody">
+    <section class="tabPane" data-pane="prompt" role="tabpanel">
+          <div class="group">
+            <h3>Prompt</h3>
+            <p class="fine">Optional context and vocabulary — helps with names, jargon and punctuation.</p>
+            <div class="presets" id="presetRow"></div>
+            <div class="fieldRow promptRow">
+              <span class="fieldLabel">In use</span>
+              <span class="promptTag" id="promptTag" data-state="none">none</span>
+            </div>
+            <textarea id="context" rows="4" placeholder="Pick a preset above, or describe the situation: names, organisations, jargon."></textarea>
+            <div class="fieldRow"><span class="fieldLabel">Output format</span></div>
+            <div class="segmented small">
+              <button class="seg2 active" data-pformat="text">Plain text</button>
+              <button class="seg2" data-pformat="json">JSON turns</button>
+            </div>
+            <div class="fieldRow"><span class="fieldLabel">Transcript layout</span></div>
+      <select id="layoutSel" aria-label="Transcript layout"></select>
+
+      <button class="ghostBtn wide" id="applyPrompt">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 13 4 4L19 7"/></svg>
+              Apply prompt
+            </button>
+          </div>
+    </section>
+
+    <section class="tabPane hidden" data-pane="recognition" role="tabpanel">
+          <div class="group">
+            <h3>Decoding</h3>
+            <div class="fieldRow"><span class="fieldLabel">CPU threads</span><output id="threadsVal">8</output></div>
+            <input type="range" id="threads" min="2" max="16" step="1" value="8" />
+            <div class="fieldRow"><span class="fieldLabel">Window length</span><output id="chunkVal">12 s</output></div>
+            <input type="range" id="chunk" min="6" max="24" step="1" value="12" />
+            <div class="fieldRow"><span class="fieldLabel">Overlap</span><output id="overlapVal">2 s</output></div>
+            <input type="range" id="overlap" min="0" max="5" step="0.5" value="2" />
+            <div class="fieldRow"><span class="fieldLabel">Sampling</span></div>
+            <div class="segmented small">
+              <button class="seg2 active" data-decoding="greedy">Greedy</button>
+              <button class="seg2" data-decoding="sampling">Sampling</button>
+            </div>
+            <div class="fieldRow"><span class="fieldLabel">Temperature</span><output id="tempVal">0.70</output></div>
+            <input type="range" id="temperature" min="0" max="1.5" step="0.05" value="0.7" />
+            <div class="fieldRow"><span class="fieldLabel">Top-p</span><output id="topPVal">0.90</output></div>
+            <input type="range" id="topP" min="0.1" max="1" step="0.05" value="0.9" />
+          </div>
+    </section>
+
+    <section class="tabPane hidden" data-pane="model" role="tabpanel">
+          <div class="group">
+            <h3>Text model</h3>
+            <p class="fine">Summaries and minutes run on a local GGUF through llama-server. Any model placed in <code>models/llm/</code> shows up here.</p>
+            <div class="fieldRow">
+              <span class="fieldLabel">Model</span>
+              <output id="llmModelSize">—</output>
+            </div>
+            <select id="llmModel"></select>
+            <input id="llmPath" type="text" placeholder="or an absolute path to a .gguf" />
+
+            <div class="fieldRow"><span class="fieldLabel">Threads</span><output id="llmThreadsVal">8</output></div>
+            <input type="range" id="llmThreads" min="1" max="16" step="1" value="8" />
+
+            <div class="fieldRow"><span class="fieldLabel">Context window</span><output id="llmCtxVal">4096</output></div>
+            <input type="range" id="llmCtx" min="1024" max="8192" step="512" value="4096" />
+
+            <div class="fieldRow"><span class="fieldLabel">Temperature</span><output id="llmTempVal">0.30</output></div>
+            <input type="range" id="llmTemp" min="0" max="1.5" step="0.05" value="0.3" />
+
+            <div class="fieldRow"><span class="fieldLabel">Max output tokens</span><output id="llmTokensVal">700</output></div>
+            <input type="range" id="llmTokens" min="128" max="2048" step="64" value="700" />
+
+            <div class="fieldRow"><span class="fieldLabel">Repeat penalty</span><output id="llmRepVal">1.08</output></div>
+            <input type="range" id="llmRep" min="1" max="1.4" step="0.01" value="1.08" />
+
+            <button class="ghostBtn wide" id="llmApply">Apply &amp; reload model</button>
+            <p class="fine" id="llmStatus">—</p>
+          </div>
+    </section>
+
+    <section class="tabPane hidden" data-pane="about" role="tabpanel">
+          <div class="group">
+            <h3>About</h3>
+            <p class="fine" id="aboutEngine">—</p>
+          </div>
+    </section>
+
+  </div>
+</aside>
+
+<aside class="drawer right" id="historyDrawer" aria-hidden="true">
+  <div class="drawerHead">
+    <h2>History</h2>
+    <div class="drawerHeadActions">
+      <button class="iconBtn" id="refreshHistory" title="Refresh">⟳</button>
+      <button class="iconBtn" data-close aria-label="Close">✕</button>
+    </div>
+  </div>
+  <div class="drawerBody" id="historyList"></div>
+</aside>
+
+<div class="menu" id="aiShareMenu" hidden>
+  <button data-share="copy">Copy text</button>
+  <button data-share="copy-md">Copy as Markdown</button>
+  <button data-share="txt">Download .txt</button>
+  <button data-share="md">Download .md</button>
+  <button data-share="json">Download .json</button>
+  <button data-share="mail">Send by e-mail</button>
+  <button data-share="native" id="aiShareNative">Share sheet…</button>
+</div>
+
+<div class="menu" id="exportMenu" hidden>
+  <button data-export="txt">Text (.txt)</button>
+  <button data-export="md">Markdown (.md)</button>
+  <button data-export="srt">Subtitles (.srt)</button>
+  <button data-export="json">JSON (.json)</button>
+</div>
+
+
+<section class="helpScreen" id="helpScreen" aria-hidden="true" role="dialog" aria-label="How MoScribe works">
+  <div class="helpInner">
+    <header class="helpHead">
+      <div class="helpTitle">
+        <img class="helpMark" src="/static/brand/logo-mark-114.png" alt="" width="40" height="40" />
+        <div>
+          <h1>How MoScribe works</h1>
+          <p>Local speech-to-text with speaker separation and on-device summaries. Nothing leaves this machine.</p>
+        </div>
+      </div>
+      <button class="iconBtn" id="closeHelp" aria-label="Close">✕</button>
+    </header>
+
+    <section class="helpSection">
+      <h2>The pipeline</h2>
+      <ol class="pipe">
+        <li><span class="pipeDot" style="--c:#3b82f6">1</span>
+          <strong>Capture</strong>
+          <p>The browser records 24 kHz mono audio and cuts a window at the quietest point near the boundary, so words are not sliced mid-syllable.</p></li>
+        <li><span class="pipeDot" style="--c:#8b5cf6">2</span>
+          <strong>Voices</strong>
+          <p>WeSpeaker ResNet34 turns each utterance into a 256-dimension voiceprint; clustering groups them into speakers. Uploads are cut at speaker turns, so a label is right by construction.</p></li>
+        <li><span class="pipeDot" style="--c:#ec4899">3</span>
+          <strong>Recognition</strong>
+          <p>VibeASR.cpp — VibeVoice-ASR-BitNet, 1.58 GB, I8_S encoder and I2_S language model — transcribes each window on the CPU, faster than real time.</p></li>
+        <li><span class="pipeDot" style="--c:#f59e0b">4</span>
+          <strong>Stitching</strong>
+          <p>Overlapping windows are merged with a sliding matcher that tolerates transcription drift at the seams, so a sentence is never printed twice.</p></li>
+        <li><span class="pipeDot" style="--c:#0ea5e9">5</span>
+          <strong>Thinking</strong>
+          <p>BitNet b1.58 2B-4T, served by llama.cpp, writes summaries, minutes and action items. It reads only your transcript and runs on the same machine.</p></li>
+      </ol>
+    </section>
+
+    <section class="helpSection">
+      <h2>Using it</h2>
+      <div class="helpGrid">
+        <article><h3>Live</h3><p>Press the orb or <kbd>Space</kbd>. Speak normally; text lands roughly every ten seconds. Press again to finish — the last window is transcribed before the session closes.</p></article>
+        <article><h3>Upload</h3><p>Drop a wav, mp3, m4a, flac, ogg or mp4. Windows are planned at speaker turns and transcribed in order; the progress bar counts them.</p></article>
+        <article><h3>Speakers</h3><p>Each voice gets a colour and a name. Click a name to rename it — the change carries into copy and export. Names the app hears in an introduction ("my name is Anna") are offered as a suggestion, never applied silently.</p></article>
+        <article><h3>Prompts</h3><p>Context biases recognition toward names and jargon. Pick a preset (meeting, clinical, legal, Amtsdeutsch…) or write your own, then apply it. The active prompt is shown as a tag.</p></article>
+        <article><h3>AI actions</h3><p>Summarize, Minutes, Action items, Clean up, translate, or ask your own question. Results stream in the side panel and can be copied, downloaded as .txt/.md/.json, mailed, or shared.</p></article>
+        <article><h3>Models</h3><p>Settings → Model picks any GGUF in <code>models/llm/</code> and exposes threads, context, temperature, output length and repeat penalty. Applying reloads the model and reports the load time.</p></article>
+      </div>
+    </section>
+
+    <section class="helpSection">
+      <h2>Shortcuts</h2>
+      <dl class="keys">
+        <div><dt><kbd>Space</kbd></dt><dd>start / stop recording</dd></div>
+        <div><dt><kbd>Esc</kbd></dt><dd>finish the session, or close a panel</dd></div>
+        <div><dt><kbd>⌘⇧C</kbd></dt><dd>copy the transcript</dd></div>
+        <div><dt><kbd>Enter</kbd></dt><dd>apply a speaker name</dd></div>
+      </dl>
+    </section>
+
+    <section class="helpSection">
+      <h2>Who built it</h2>
+      <div class="helpCols">
+        <div>
+          <h3>Development</h3>
+          <p>Designed and built by <strong>Mohammed</strong> at <a href="https://kmail.at" target="_blank" rel="noopener">kmail.at</a>, working with <a href="https://hermes-agent.nousresearch.com" target="_blank" rel="noopener">Hermes Agent</a> as the engineering assistant. The app is a kmail product; the interface, diarisation work and local-model integration were shaped over this build.</p>
+          <h3>Built on</h3>
+          <ul class="plain">
+            <li><a href="https://github.com/microsoft/VibeASR.cpp" target="_blank" rel="noopener">VibeASR.cpp</a> — VibeVoice-ASR-BitNet (MIT)</li>
+            <li><a href="https://huggingface.co/onnx-community/wespeaker-voxceleb-resnet34-LM" target="_blank" rel="noopener">WeSpeaker ResNet34-LM</a> — speaker embeddings</li>
+            <li><a href="https://github.com/microsoft/BitNet" target="_blank" rel="noopener">BitNet b1.58 2B-4T</a> via llama.cpp — summaries</li>
+            <li>FastAPI, vanilla JavaScript, no build step</li>
+          </ul>
+        </div>
+        <div>
+          <h3>How it was developed</h3>
+          <ul class="plain">
+            <li>Local-first from the start: every model runs on this Mac, no API keys, no upload.</li>
+            <li>Speaker labels replaced an MFCC heuristic once measured voiceprints proved far more reliable.</li>
+            <li>Uploads are cut at diarised speaker turns, which is what makes labels stable.</li>
+            <li>The transcript renders incrementally, so streaming text never flickers.</li>
+            <li>German generation was tested and deliberately left off: at 2.4 B the model invents facts when forced to write German.</li>
+          </ul>
+          <h3>Privacy</h3>
+          <p>Audio, transcripts and summaries stay on disk under this app's folder. History is local JSON; deleting a session removes its files.</p>
+        </div>
+      </div>
+    </section>
+
+    <footer class="helpFoot">
+      <span>MoScribe · kmail.at</span>
+      <span>ASR 1.58 GB · speaker model 26 MB · text model 1.2 GB</span>
+    </footer>
+  </div>
+</section>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+.venv
+models
+bin
+data
+dist
+build
+__pycache__
+*.gguf
+*.onnx
+*.dmg
+*.zip
+.git

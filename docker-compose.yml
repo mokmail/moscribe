@@ -1,0 +1,16 @@
+services:
+  moscribe:
+    build: .
+    image: moscribe:1.0.0
+    container_name: moscribe
+    ports:
+      - "8770:8770"
+    volumes:
+      - moscribe-data:/data
+    environment:
+      OMP_NUM_THREADS: "4"
+      MOSCRIBE_HOST: "0.0.0.0"
+    restart: unless-stopped
+
+volumes:
+  moscribe-data:

@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moscribe"
+version = "1.0.0"
+description = "Local speech to text with speaker separation and on-device summaries"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Mohammed", email = "kmail@kmail.at" }]
+keywords = ["speech-to-text", "asr", "diarization", "bitnet", "local", "offline"]
+classifiers = [
+  "Environment :: X11 Applications",
+  "Environment :: MacOS X",
+  "Environment :: Win32 (MS Windows)",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn>=0.27",
+  "python-multipart>=0.0.9",
+  "numpy>=1.24",
+  "onnxruntime>=1.17",
+  "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+icons = ["pillow>=10"]
+dev = ["pillow>=10", "pyinstaller>=6.6", "ruff>=0.4"]
+
+[project.scripts]
+moscribe = "moscribe_cli:main"
+
+[project.urls]
+Homepage = "https://github.com/mokmail/moscribe"
+Issues = "https://github.com/mokmail/moscribe/issues"
+
+[tool.setuptools]
+py-modules = ["moscribe_cli"]
+packages = ["moscribe"]
+
+[tool.setuptools.package-data]
+moscribe = ["static/*", "static/*/*", "static/*/*/*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501", "E402"]
+
+[tool.ruff.lint.per-file-ignores]
+"moscribe_cli.py" = ["E402"]

@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" ruff
+
+      - name: Lint
+        run: ruff check moscribe moscribe_cli.py packaging scripts
+
+      - name: Compile
+        run: python -m compileall -q moscribe moscribe_cli.py packaging scripts
+
+      - name: Import the app
+        run: python -c "from moscribe.main import app; print(len(app.routes), 'routes')"
+
+      - name: CLI responds
+        run: |
+          moscribe --version
+          moscribe --check || echo "::notice::models and binaries are absent on CI — expected"
+
+      - name: Build the wheel
+        run: python -m pip wheel . --no-deps -w dist
+
+      - name: Wheel contains the interface
+        run: python scripts/check_wheel.py

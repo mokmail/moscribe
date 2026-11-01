@@ -1,0 +1,170 @@
+name: Release
+
+# Tag a version to publish installers:
+#   git tag v1.0.0 && git push origin v1.0.0
+# Everything is built on GitHub's runners — no local toolchain needed.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 1.0.0)"
+        required: false
+        default: "0.0.0-dev"
+
+permissions:
+  contents: write
+
+env:
+  VIBEASR_REF: main
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    # macOS arm64 is the reference build; the other targets are best-effort until
+    # their C++ build is confirmed on CI.
+    continue-on-error: ${{ matrix.soft }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-14
+            tag: macos-arm64
+            soft: false
+          - name: macOS x64
+            os: macos-13
+            tag: macos-x64
+            soft: true
+          - name: Linux x64
+            os: ubuntu-22.04
+            tag: linux-x64
+            soft: true
+          - name: Windows x64
+            os: windows-2022
+            tag: windows-x64
+            soft: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then V="${{ github.event.inputs.version }}"; else V="${GITHUB_REF_NAME#v}"; fi
+          echo "value=$V" >> "$GITHUB_OUTPUT"
+          echo "building $V"
+
+      - name: Enable long paths (Windows)
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
+      - name: Build the native engines
+        id: engines
+        shell: bash
+        run: |
+          set -e
+          git clone --depth 1 --branch "$VIBEASR_REF" https://github.com/microsoft/VibeASR.cpp "$RUNNER_TEMP/VibeASR.cpp"
+          cd "$RUNNER_TEMP/VibeASR.cpp"
+          if [ -f setup_env.py ]; then python setup_env.py || true; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then GEN=(-G "Visual Studio 17 2022" -A x64); else GEN=(); fi
+          cmake -S . -B build "${GEN[@]}" -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF
+          cmake --build build --config Release --target asr_stream_server -j 4
+          cmake -S . -B build-llm "${GEN[@]}" -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_SERVER=ON -DGGML_OPENMP=OFF
+          cmake --build build-llm --config Release --target llama-server -j 4
+
+      - name: Collect portable binaries
+        shell: bash
+        run: python packaging/prepare_bin.py --src "$RUNNER_TEMP/VibeASR.cpp" --out bin
+
+      - name: Install app dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Icons
+        run: python packaging/make_icons.py
+
+      - name: Bundle with PyInstaller
+        run: pyinstaller --clean --noconfirm packaging/moscribe.spec
+        env:
+          MOSCRIBE_ICON: moscribe/static/brand/app.icns
+
+      - name: Package — macOS
+        if: runner.os == 'macOS'
+        run: |
+          ./packaging/macos/make_dmg.sh "${{ steps.ver.outputs.value }}"
+          ditto -c -k --sequesterRsrc --keepParent bin "dist/moscribe-${{ matrix.tag }}-bin.zip"
+
+      - name: Package — Linux
+        if: runner.os == 'Linux'
+        run: |
+          tar -C dist -czf "dist/MoScribe-${{ steps.ver.outputs.value }}-${{ matrix.tag }}.tar.gz" MoScribe
+          (cd bin && zip -r "../dist/moscribe-${{ matrix.tag }}-bin.zip" .)
+          chmod +x dist/MoScribe/MoScribe
+
+      - name: Package — Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/MoScribe/* -DestinationPath "dist/MoScribe-${{ steps.ver.outputs.value }}-${{ matrix.tag }}.zip"
+          Compress-Archive -Path bin/* -DestinationPath "dist/moscribe-${{ matrix.tag }}-bin.zip"
+          choco install innosetup --no-progress -y
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows\moscribe.iss
+
+      - name: Smoke test the bundle (macOS/Linux)
+        if: runner.os != 'Windows'
+        continue-on-error: true
+        run: |
+          ./dist/MoScribe/MoScribe --check || true
+          ./dist/MoScribe/MoScribe --port 8899 --no-browser &
+          sleep 12
+          curl -fsS http://127.0.0.1:8899/api/health | head -c 200
+          kill %1 || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moscribe-${{ matrix.tag }}
+          path: |
+            dist/*.dmg
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.exe
+          if-no-files-found: warn
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          body: |
+            ## MoScribe ${{ github.ref_name }}
+
+            Local speech to text with speaker separation and on-device summaries.
+            Nothing leaves your machine.
+
+            **Install**
+            - macOS: open the `.dmg`, drag MoScribe to Applications, then run
+              `moscribe --fetch-models` once to pull the models (~2.8 GB).
+            - Windows: run the setup `.exe`, then `moscribe --fetch-models`.
+            - Linux: unpack the `.tar.gz` and run `./MoScribe`, then fetch models.
+
+            Models are not bundled — they download once from Hugging Face.

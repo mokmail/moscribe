@@ -1,0 +1,27 @@
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+*.spec.bak
+
+# --- app state (never commit) ---
+data/
+*.log
+
+# --- models & native binaries (downloaded/built, not source) ---
+models/
+bin/
+*.gguf
+*.onnx
+*.dylib
+*.so
+*.dll
+
+# --- os noise ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
