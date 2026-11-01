@@ -131,19 +131,21 @@ class AsrEngine:
 
     # ---------------------------------------------------------------- info
     def binary_ok(self) -> bool:
-        return BIN.exists() and os.access(BIN, os.X_OK)
+        binary = resolve_bin()
+        return binary.exists() and os.access(binary, os.X_OK)
 
     def models_ok(self) -> bool:
-        return VAE_MODEL.exists() and LM_MODEL.exists()
+        vae, lm = resolve_models()
+        return vae.exists() and lm.exists()
 
     def info(self) -> dict:
         return {
             "state": self.state,
-            "binary": str(BIN),
+            "binary": str(resolve_bin()),
             "binary_ok": self.binary_ok(),
             "models_ok": self.models_ok(),
-            "vae_model": str(VAE_MODEL),
-            "lm_model": str(LM_MODEL),
+            "vae_model": str(resolve_models()[0]),
+            "lm_model": str(resolve_models()[1]),
             "load_ms": self.load_ms,
             "last_error": self.last_error,
             "chunks_done": self.chunks_done,
@@ -192,10 +194,28 @@ class AsrEngine:
             proc.kill()
             await proc.wait()
 
+    def _auto_fetch(self) -> None:
+        if getattr(self, "_fetch_tried", False):
+            return
+        self._fetch_tried = True
+        if os.environ.get("MOSCRIBE_AUTO_FETCH", "1").lower() in ("0", "false", "no", "off"):
+            return
+        try:
+            from .fetch import fetch_binaries
+
+            fetch_binaries()
+        except Exception:  # noqa: BLE001
+            pass
+
     async def ensure(self, cfg: EngineConfig) -> None:
         """Start the process (or restart it if the config needs new CLI flags)."""
         if not self.binary_ok():
-            raise EngineError(f"asr_stream_server binary missing: {BIN}")
+            self._auto_fetch()
+        binary = resolve_bin()
+        if not binary.exists() or not os.access(binary, os.X_OK):
+            raise EngineError(
+                f"asr_stream_server binary missing at {binary} — run `moscribe --fetch-models` "
+                "(it downloads the engine bundle for this platform)")
         if not self.models_ok():
             raise EngineError(
                 "models missing — run scripts/fetch_models.sh "
@@ -219,7 +239,7 @@ class AsrEngine:
                 await self._stop_locked()
 
             vae, lm = resolve_models()
-            cmd = [str(BIN), "--vae-model", str(vae), "--lm-model", str(lm),
+            cmd = [str(binary), "--vae-model", str(vae), "--lm-model", str(lm),
                    "-t", str(cfg.threads), "--max-tokens", str(cfg.max_tokens),
                    "--prompt-format", cfg.prompt_format]
             cmd += ["--greedy"] if cfg.greedy else [

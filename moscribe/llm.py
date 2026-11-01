@@ -105,11 +105,26 @@ class LLM:
         self._proc: subprocess.Popen | None = None
         self._lock = asyncio.Lock()
         self._last_error: str | None = None
+        self._fetch_tried = False
         self._started_at: float | None = None
         self.config: dict = dict(self.DEFAULTS)
         self._env_model = Path(os.environ["VIBESCRIBE_LLM_MODEL"]) if os.environ.get("VIBESCRIBE_LLM_MODEL") else None
         self._default_model = model or DEFAULT_MODEL
         self._load_config()
+
+    def _auto_fetch(self) -> None:
+        """A missing engine binary is a download, not an error the user should read."""
+        if self._fetch_tried:
+            return
+        self._fetch_tried = True
+        if os.environ.get("MOSCRIBE_AUTO_FETCH", "1").lower() in ("0", "false", "no", "off"):
+            return
+        try:
+            from .fetch import fetch_binaries
+
+            fetch_binaries()
+        except Exception:  # noqa: BLE001 - offline is a real possibility
+            pass
 
     def resolve_binary(self) -> Path:
         """Re-check on demand: a first-run download lands after import."""
@@ -236,6 +251,9 @@ class LLM:
                         break
                     await asyncio.sleep(0.2)
             self.resolve_binary()
+            if not self.binary.exists():
+                self._auto_fetch()
+                self.resolve_binary()
             if not self.binary.exists() or not self.model.exists():
                 missing = []
                 if not self.binary.exists():
