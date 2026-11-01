@@ -1,4 +1,4 @@
-# MoScribe in a container — the fastest way to run it on a server or NAS.
+# MoScribe 1.0.1 in a container — the fastest way to run it on a server or NAS.
 #
 #   docker build -t moscribe .
 #   docker run --rm -p 8770:8770 -v moscribe-data:/data moscribe

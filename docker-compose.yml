@@ -1,7 +1,7 @@
 services:
   moscribe:
     build: .
-    image: moscribe:1.0.0
+    image: moscribe:1.0.1
     container_name: moscribe
     ports:
       - "8770:8770"

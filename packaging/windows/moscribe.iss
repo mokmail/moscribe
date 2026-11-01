@@ -1,7 +1,7 @@
 ; Inno Setup script — builds MoScribe-Setup-x.y.z.exe
 ;   iscc packaging\windows\moscribe.iss
 #define AppName "MoScribe"
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.1"
 #define AppPublisher "kmail.at"
 #define AppURL "https://github.com/mokmail/moscribe"
 

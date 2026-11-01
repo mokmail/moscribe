@@ -6,7 +6,7 @@
 # Builds the .app first when it is missing (needs .venv with pyinstaller).
 set -euo pipefail
 
-VERSION="${1:-1.0.0}"
+VERSION="${1:-1.0.1}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 APP="$ROOT/dist/MoScribe.app"
 OUT="$ROOT/dist/MoScribe-macos-$(uname -m).dmg"   # stable name for /latest/download/
