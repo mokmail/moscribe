@@ -74,6 +74,10 @@ jobs:
           set -e
           git clone --depth 1 --branch "$VIBEASR_REF" https://github.com/microsoft/VibeASR.cpp "$RUNNER_TEMP/VibeASR.cpp"
           cd "$RUNNER_TEMP/VibeASR.cpp"
+          # llama.cpp and gguf-py live in submodules; a shallow clone without them
+          # leaves 3rdparty/llama.cpp empty and cmake dies on add_subdirectory
+          git submodule update --init --recursive --depth 1
+          python -m pip install -q gguf || true
           if [ -f setup_env.py ]; then python setup_env.py || true; fi
           if [ "$RUNNER_OS" = "Windows" ]; then GEN=(-G "Visual Studio 17 2022" -A x64); else GEN=(); fi
           cmake -S . -B build "${GEN[@]}" -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF
