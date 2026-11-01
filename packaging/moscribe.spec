@@ -25,7 +25,10 @@ elif os.name == "nt":
     ICON = BRAND / "app.ico"
 else:
     ICON = BRAND / "app-512.png"
-ICON = Path(os.environ.get("MOSCRIBE_ICON", ICON)) if os.environ.get("MOSCRIBE_ICON") else ICON
+if os.environ.get("MOSCRIBE_ICON"):
+    ICON = Path(os.environ["MOSCRIBE_ICON"])
+    if not ICON.is_absolute():
+        ICON = ROOT / ICON          # PyInstaller runs the spec from another cwd
 if not ICON.exists():
     print(f"  ! icon missing: {ICON} — run python packaging/make_icons.py")
     ICON = None

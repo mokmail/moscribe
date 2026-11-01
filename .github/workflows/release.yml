@@ -80,12 +80,13 @@ jobs:
           python -m pip install -q gguf || true
           # their setup_env.py runs its own bare cmake configure, which collides
           # with the generator flags set below (Windows: "generator platform: x64")
-          # VibeASR.cpp refuses MSVC ("Clang or GCC is required"), so Windows builds
-          # with clang-cl through Ninja
+          # VibeASR.cpp refuses MSVC ("Clang or GCC is required"). clang-cl cannot
+          # compile llama.cpp's common.cpp (no <chrono> transitively), so Windows
+          # builds with MinGW GCC through MinGW Makefiles.
           if [ "$RUNNER_OS" = "Windows" ]; then
-            choco install llvm ninja -y --no-progress
-            export PATH="/c/Program Files/LLVM/bin:$PATH"
-            GEN=(-G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl)
+            choco install mingw -y --no-progress
+            export PATH="/c/ProgramData/mingw64/mingw64/bin:/c/tools/mingw64/bin:$PATH"
+            GEN=(-G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++)
             EXTRA=()
           else
             GEN=()
@@ -110,8 +111,6 @@ jobs:
 
       - name: Bundle with PyInstaller
         run: pyinstaller --clean --noconfirm packaging/moscribe.spec
-        env:
-          MOSCRIBE_ICON: moscribe/static/brand/app.icns
 
       - name: Package — macOS
         if: runner.os == 'macOS'
@@ -164,6 +163,16 @@ jobs:
           for f in *.dmg *.tar.gz *setup.exe *.zip; do [ -f "$f" ] && sha256sum "$f" >> SHA256SUMS.txt; done
           cat SHA256SUMS.txt || true
 
+      - name: Publish this platform
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/MoScribe-*
+            dist/moscribe-*-bin.zip
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: false
+
       - uses: actions/upload-artifact@v4
         with:
           name: moscribe-${{ matrix.tag }}
@@ -175,31 +184,5 @@ jobs:
             dist/SHA256SUMS.txt
           if-no-files-found: warn
 
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/*
-          generate_release_notes: true
-          body: |
-            ## MoScribe ${{ github.ref_name }}
-
-            Local speech to text with speaker separation and on-device summaries.
-            Nothing leaves your machine.
-
-            **Install**
-            - macOS: open the `.dmg`, drag MoScribe to Applications, then run
-              `moscribe --fetch-models` once to pull the models (~2.8 GB).
-            - Windows: run the setup `.exe`, then `moscribe --fetch-models`.
-            - Linux: unpack the `.tar.gz` and run `./MoScribe`, then fetch models.
-
-            Models are not bundled — they download once from Hugging Face.
+  # Assets are published per platform inside `build`, so one failing target never
+  # hides the packages that did build. Nothing to aggregate.
