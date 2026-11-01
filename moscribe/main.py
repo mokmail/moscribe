@@ -185,6 +185,19 @@ def plan_chunks_by_speaker(spans: list[tuple[float, float, int]], total_dur: flo
 
 # ------------------------------------------------------------------- REST API
 
+@app.on_event("shutdown")
+async def stop_engines():
+    """Do not leave llama-server / asr_stream_server running after the app exits."""
+    try:
+        LLM_ENGINE.stop()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        await ENGINE.stop()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @app.on_event("startup")
 async def start_vitals():
     asyncio.create_task(_vitals_sampler())

@@ -205,12 +205,21 @@ class LLM:
         }
 
     async def ensure(self) -> bool:
-        """Start the server once; cheap no-op when it is already answering."""
-        if self._ready():
+        """Start the server once; cheap no-op when *our* server is answering."""
+        if self._ready() and self._proc is not None and self._proc.poll() is None:
             return True
         async with self._lock:
-            if self._ready():
+            if self._ready() and self._proc is not None and self._proc.poll() is None:
                 return True
+            if self._ready():
+                # something answers on our port but it is not our child: a server
+                # left behind by an earlier app run, still holding the old threads
+                # and context. Settings would silently do nothing until it is gone.
+                self._kill_foreign()
+                for _ in range(10):
+                    if not self._ready():
+                        break
+                    await asyncio.sleep(0.2)
             if not self.binary.exists() or not self.model.exists():
                 self._last_error = ("llama-server or GGUF missing — build "
                                     "~/apps/VibeASR.cpp (LLAMA_BUILD_SERVER=ON) and fetch "
@@ -225,6 +234,7 @@ class LLM:
 
             log = DATA_DIR / "llama-server.log"
             log.parent.mkdir(parents=True, exist_ok=True)
+            self._log_path = log
             model_path = self.model
             self._proc = subprocess.Popen(
                 [str(self.binary), "-m", str(model_path), "--host", "127.0.0.1",
@@ -235,14 +245,38 @@ class LLM:
 
             for _ in range(120):                       # model load takes a few seconds
                 if self._proc.poll() is not None:
-                    self._last_error = f"llama-server exited with code {self._proc.returncode}"
+                    self._last_error = self._exit_reason(self._proc.returncode)
                     return False
                 if self._ready():
                     self._last_error = None
                     return True
                 await asyncio.sleep(0.5)
-            self._last_error = "llama-server did not become ready in time"
+            self._last_error = (f"llama-server did not answer within 60 s — {self._log_tail() or 'no output'}"
+                                f" (log: {getattr(self, '_log_path', '?')})")
             return False
+
+    def _log_tail(self, lines: int = 4) -> str:
+        path = getattr(self, "_log_path", None)
+        if not path or not path.exists():
+            return ""
+        try:
+            text = path.read_text(errors="replace").strip().splitlines()
+            useful = [ln.strip() for ln in text if ln.strip()
+                      and not ln.startswith(("llama_", "load_", "print_info", "ggml_"))]
+            return " / ".join(useful[-lines:])[-300:]
+        except OSError:
+            return ""
+
+    def _exit_reason(self, code: int | None) -> str:
+        """Say what actually went wrong instead of blaming missing files."""
+        tail = self._log_tail().lower()
+        hint = ""
+        if "out of memory" in tail or "alloc" in tail or "failed to allocate" in tail:
+            hint = " — the context you asked for does not fit in memory; lower it in Settings → Model"
+        elif "address already in use" in tail or "bind" in tail:
+            hint = f" — port {self.port} is taken; set another one with VIBESCRIBE_LLM_PORT"
+        return (f"llama-server exited with code {code}{hint}"
+                f" — {self._log_tail() or 'no output'} (log: {getattr(self, '_log_path', '?')})")
 
     def _pids_on_port(self) -> list[int]:
         """PIDs listening on our port. A server left behind by an earlier app
@@ -254,6 +288,20 @@ class LLM:
             return [int(p) for p in out.split() if p.strip().isdigit()]
         except Exception:  # noqa: BLE001
             return []
+
+    def stop(self) -> None:
+        """Terminate the child we started (and any orphan on our port)."""
+        proc, self._proc = self._proc, None
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+        self._kill_foreign()
 
     def _kill_foreign(self) -> None:
         for pid in self._pids_on_port():
