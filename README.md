@@ -13,25 +13,167 @@ recognition and llama.cpp for text. Built by [kmail.at](https://kmail.at).
 
 ## Install
 
-| Platform | Package | Then |
-| --- | --- | --- |
-| macOS (Apple silicon / Intel) | `MoScribe-<version>-macos-*.dmg` | drag to Applications |
-| Windows 10/11 (x64) | `MoScribe-<version>-windows-x64-setup.exe` | run the installer |
-| Linux (x64) | `MoScribe-<version>-linux-x64.tar.gz` | unpack, `./MoScribe` |
-| Docker (server / NAS) | `docker compose up -d` | open `http://localhost:8770` |
-| From source (any OS) | `pip install -e ".[dev]"` | `moscribe` |
+MoScribe is a desktop app that runs entirely on your machine. Pick the line that
+matches your system — every option ends with the same two commands.
 
-Latest artifacts: [Releases](https://github.com/mokmail/moscribe/releases).
+Installers come from [Releases](https://github.com/mokmail/moscribe/releases), built by
+[the release workflow](.github/workflows/release.yml). The macOS arm64 build is the
+reference target; the others are produced by the same workflow.
 
-**First run downloads the models — about 2.8 GB, once:**
+### Requirements
+
+| | |
+| --- | --- |
+| OS | macOS 12+ (Apple silicon or Intel), Windows 10/11 x64, Linux x64 (glibc 2.31+), or any Docker host |
+| CPU | any x86-64 or Apple-silicon CPU — no GPU, no CUDA, no Metal needed |
+| RAM | 8 GB free (models stay resident: about 3 GB) |
+| Disk | ~3 GB for models, plus your recordings and transcripts |
+| Network | only for the one-time model download |
+
+### macOS
+
+1. Download `MoScribe-<version>-macos-arm64.dmg` (Apple silicon) or
+   `-macos-x64.dmg` (Intel) from [Releases](https://github.com/mokmail/moscribe/releases).
+2. Open the `.dmg` and drag **MoScribe** into *Applications*.
+3. First launch only: the build is not notarised, so macOS blocks it. Right-click the
+   app → **Open** → **Open**, or allow it under *System Settings → Privacy & Security*
+   ("Open Anyway").
+4. Allow the microphone when asked — the app records locally; nothing is uploaded.
+5. Fetch the models once, then start it:
+
+   ```bash
+   /Applications/MoScribe.app/Contents/MacOS/MoScribe --fetch-models
+   /Applications/MoScribe.app/Contents/MacOS/MoScribe
+   ```
+
+### Windows
+
+1. Download `MoScribe-<version>-windows-x64-setup.exe` from
+   [Releases](https://github.com/mokmail/moscribe/releases) and run it.
+2. The installer is unsigned, so SmartScreen shows "Windows protected your PC" —
+   click **More info → Run anyway**.
+3. If you picked the desktop shortcut option, launch it; otherwise use the Start-menu
+   entry **MoScribe**.
+4. Open a terminal once for the models:
+
+   ```powershell
+   & "C:\Program Files\MoScribe\MoScribe.exe" --fetch-models
+   ```
+
+   (or `moscribe --fetch-models` if the folder is on your `PATH`).
+5. Launch MoScribe again and allow microphone access.
+
+### Linux
 
 ```bash
-moscribe --fetch-models     # or:  python -m moscribe.fetch
-moscribe --check            # confirm binaries + models are in place
+tar -xzf MoScribe-<version>-linux-x64.tar.gz
+cd MoScribe
+./MoScribe --fetch-models     # once, ~2.8 GB
+./MoScribe                    # opens http://127.0.0.1:8770
 ```
 
-The weights come straight from Hugging Face (VibeVoice-ASR-BitNet, BitNet b1.58 2B-4T,
-WeSpeaker ResNet34). It is a download, not an upload.
+The tarball also ships `share/applications/moscribe.desktop` and a 512 px icon — copy
+them to `~/.local/share/applications/` and `~/.local/share/icons/` to get a launcher
+entry. Keep the `_internal/` folder beside the executable: it holds the engines
+(`_internal/bin/`), the interface and the Python runtime.
+
+### Docker (server, NAS, headless)
+
+The fastest path if you already run containers — the image builds the engines for you:
+
+```bash
+docker compose up -d          # or: docker run -d -p 8770:8770 -v moscribe-data:/data moscribe
+```
+
+Open `http://<host>:8770`. Models download into the `moscribe-data` volume on first
+start. Set `MOSCRIBE_SKIP_FETCH=1` to manage the download yourself, and
+`MOSCRIBE_HOST=0.0.0.0` when you want it reachable from another machine.
+
+### From source (any OS)
+
+Needs Python 3.10+, CMake and a C++17 compiler:
+
+```bash
+git clone https://github.com/mokmail/moscribe
+cd moscribe
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+.venv/bin/moscribe --fetch-models
+.venv/bin/moscribe
+```
+
+On Windows use `.venv\Scripts\pip` and `.venv\Scripts\moscribe.exe`.
+Building the native engines from scratch is covered in [docs/BUILD.md](docs/BUILD.md).
+
+### First run: the models
+
+The app ships without weights — they would triple the installer size.
+
+```bash
+moscribe --fetch-models      # ~2.8 GB, resumable, straight from Hugging Face
+moscribe --check             # confirm every binary and model is found
+```
+
+| Model | Purpose | Size |
+| --- | --- | --- |
+| VibeVoice-ASR-BitNet (VAE + LM) | speech recognition | 1.6 GB |
+| BitNet b1.58 2B-4T | summaries, minutes, rewrites | 1.1 GB |
+| WeSpeaker ResNet34 | speaker voiceprints | 25 MB |
+
+Downloads land in your user data folder (`MOSCRIBE_DATA` overrides it):
+
+| OS | Where |
+| --- | --- |
+| macOS | `~/Library/Application Support/MoScribe/models` |
+| Windows | `%LOCALAPPDATA%\MoScribe\models` |
+| Linux | `~/.local/share/moscribe/models` |
+| Docker | the `/data` volume |
+
+Already have the GGUFs on a USB disk or a shared server? Point at them and skip the
+download: `MOSCRIBE_MODELS=/path/to/models moscribe`. The layout mirrors the table
+above (`vibeasr/`, `llm/`, `spk/`).
+
+### Verify the install
+
+```bash
+moscribe --check
+```
+
+```
+MoScribe — ready
+  app_dir    …/MoScribe/_internal
+  data_dir   ~/Library/Application Support/MoScribe
+  models_dir ~/Library/Application Support/MoScribe/models
+  frozen     True
+```
+
+`ready` means the engines and all three models were found. `incomplete` prints exactly
+what is missing.
+
+### Upgrade / uninstall
+
+Upgrade by installing the newer package over the old one — your history and models are
+untouched in the data folder.
+
+Uninstall: delete the app (or run the Windows uninstaller). To remove everything,
+delete the data folder as well. On macOS:
+
+```bash
+rm -rf "/Applications/MoScribe.app" "$HOME/Library/Application Support/MoScribe"
+```
+
+### If something goes wrong
+
+| Symptom | Fix |
+| --- | --- |
+| `missing binary: asr_stream_server` | the bundle was built without `bin/`, or the engines failed to compile — run `moscribe --fetch-models`, which pulls the published `-bin.zip` |
+| `missing model: …` | re-run `moscribe --fetch-models`; interrupted downloads resume from `.part` files |
+| Engine exits with `Library not loaded` | rpaths were not rewritten when packaging — see [docs/BUILD.md](docs/BUILD.md) step 2 |
+| macOS: "app is damaged" | the ad-hoc signature was stripped by the browser; re-download, or `xattr -dr com.apple.quarantine /Applications/MoScribe.app` |
+| Windows: SmartScreen blocks the setup | **More info → Run anyway** (unsigned build) |
+| Microphone permission denied | macOS: *System Settings → Privacy & Security → Microphone*; browser-only tabs also need the site permission |
+| Port 8770 busy | `moscribe --port 8780` picks the next free port automatically |
+| First transcription is slow | models load lazily; the app warms them at boot, or call `POST /api/engine/warmup` |
 
 ## Use
 
