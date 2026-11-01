@@ -1,0 +1,22 @@
+{
+  "name": "MoScribe",
+  "kind": "fastapi",
+  "bootstrap": [
+    "pip install -r requirements.txt"
+  ],
+  "build": [
+    "python -m compileall -q moscribe moscribe_cli.py packaging scripts"
+  ],
+  "test": [
+    "python -c \"from moscribe.main import app; print(len(app.routes), 'routes')\"",
+    "python -c \"import moscribe.paths as p; p.ensure_dirs(); print(p.describe())\"",
+    "python -m pip wheel . --no-deps -w dist -q && python scripts/check_wheel.py"
+  ],
+  "start": "python -m moscribe_cli --host 127.0.0.1 --port 8770 --no-browser",
+  "port": 8770,
+  "readinessPath": "/api/health",
+  "evidence": [
+    "App entry point moved from main.py to moscribe/main.py; the CLI owns the start command",
+    "readinessPath /api/health reports engine + text-model state, while / returns the SPA"
+  ]
+}
