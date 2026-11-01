@@ -14,6 +14,7 @@ AppPublisherURL={#AppURL}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
+OutputDir=..\..\dist
 OutputBaseFilename=MoScribe-windows-x64-setup
 Compression=lzma2/max
 SolidCompression=yes
