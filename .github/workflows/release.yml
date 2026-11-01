@@ -80,10 +80,20 @@ jobs:
           python -m pip install -q gguf || true
           # their setup_env.py runs its own bare cmake configure, which collides
           # with the generator flags set below (Windows: "generator platform: x64")
-          if [ "$RUNNER_OS" = "Windows" ]; then GEN=(-G "Visual Studio 17 2022" -A x64); else GEN=(); fi
-          cmake -S . -B build "${GEN[@]}" -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF
+          # VibeASR.cpp refuses MSVC ("Clang or GCC is required"), so Windows builds
+          # with clang-cl through Ninja
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            choco install llvm ninja -y --no-progress
+            export PATH="/c/Program Files/LLVM/bin:$PATH"
+            GEN=(-G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl)
+            EXTRA=()
+          else
+            GEN=()
+            EXTRA=(-DGGML_OPENMP=OFF)
+          fi
+          cmake -S . -B build "${GEN[@]}" -DCMAKE_BUILD_TYPE=Release "${EXTRA[@]}"
           cmake --build build --config Release --target asr_stream_server -j 4
-          cmake -S . -B build-llm "${GEN[@]}" -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_SERVER=ON -DGGML_OPENMP=OFF
+          cmake -S . -B build-llm "${GEN[@]}" -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_SERVER=ON "${EXTRA[@]}"
           cmake --build build-llm --config Release --target llama-server -j 4
 
       - name: Collect portable binaries
@@ -124,7 +134,7 @@ jobs:
           Terminal=false
           Categories=AudioVideo;Audio;Utility;
           DESK
-          tar -C dist -czf "dist/MoScribe-${{ steps.ver.outputs.value }}-${{ matrix.tag }}.tar.gz" MoScribe
+          tar -C dist -czf "dist/MoScribe-${{ matrix.tag }}.tar.gz" MoScribe
           (cd bin && zip -r "../dist/moscribe-${{ matrix.tag }}-bin.zip" .)
           chmod +x dist/MoScribe/MoScribe
 
@@ -132,7 +142,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path dist/MoScribe/* -DestinationPath "dist/MoScribe-${{ steps.ver.outputs.value }}-${{ matrix.tag }}.zip"
+          Compress-Archive -Path dist/MoScribe/* -DestinationPath "dist/MoScribe-${{ matrix.tag }}.zip"
           Compress-Archive -Path bin/* -DestinationPath "dist/moscribe-${{ matrix.tag }}-bin.zip"
           choco install innosetup --no-progress -y
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows\moscribe.iss
@@ -147,6 +157,13 @@ jobs:
           curl -fsS http://127.0.0.1:8899/api/health | head -c 200
           kill %1 || true
 
+      - name: Checksums
+        shell: bash
+        run: |
+          cd dist
+          for f in *.dmg *.tar.gz *setup.exe *.zip; do [ -f "$f" ] && sha256sum "$f" >> SHA256SUMS.txt; done
+          cat SHA256SUMS.txt || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: moscribe-${{ matrix.tag }}
@@ -155,6 +172,7 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/*.exe
+            dist/SHA256SUMS.txt
           if-no-files-found: warn
 
   publish:

@@ -11,14 +11,34 @@ runs on the same CPU. It is one local web app: a FastAPI server and a no-build-s
 interface, wrapping [VibeASR.cpp](https://github.com/microsoft/VibeASR.cpp) for
 recognition and llama.cpp for text. Built by [kmail.at](https://kmail.at).
 
+## Download
+
+Direct links — they always point at the newest release:
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| **macOS · Apple silicon** | [MoScribe-macos-arm64.dmg](https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-macos-arm64.dmg) | ~47 MB |
+| **macOS · Intel** | [MoScribe-macos-x64.dmg](https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-macos-x64.dmg) | ~48 MB |
+| **Windows 10/11 x64** | [MoScribe-windows-x64-setup.exe](https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-windows-x64-setup.exe) | ~45 MB |
+| **Linux x64** | [MoScribe-linux-x64.tar.gz](https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-linux-x64.tar.gz) | ~45 MB |
+| Windows (portable, no installer) | [MoScribe-windows-x64.zip](https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-windows-x64.zip) | ~45 MB |
+| Engines only (for a pip install) | `moscribe-<platform>-bin.zip` — fetched automatically by `moscribe --fetch-models` | ~4 MB |
+
+All releases, checksums and older versions:
+[github.com/mokmail/moscribe/releases](https://github.com/mokmail/moscribe/releases).
+
+The installers contain the app, the interface and the native engines — **not** the
+models. The first run downloads those once (~2.8 GB), see
+[First run: the models](#first-run-the-models).
+
 ## Install
 
 MoScribe is a desktop app that runs entirely on your machine. Pick the line that
 matches your system — every option ends with the same two commands.
 
-Installers come from [Releases](https://github.com/mokmail/moscribe/releases), built by
-[the release workflow](.github/workflows/release.yml). The macOS arm64 build is the
-reference target; the others are produced by the same workflow.
+Everything is built by [the release workflow](.github/workflows/release.yml). The macOS
+arm64 build is the reference target; the other platforms are produced by the same
+workflow and may land a few minutes after it.
 
 ### Requirements
 
@@ -32,8 +52,8 @@ reference target; the others are produced by the same workflow.
 
 ### macOS
 
-1. Download `MoScribe-<version>-macos-arm64.dmg` (Apple silicon) or
-   `-macos-x64.dmg` (Intel) from [Releases](https://github.com/mokmail/moscribe/releases).
+1. Download [`MoScribe-macos-arm64.dmg`](https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-macos-arm64.dmg) (Apple silicon) or
+   [`MoScribe-macos-x64.dmg`](https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-macos-x64.dmg) (Intel) from [Releases](https://github.com/mokmail/moscribe/releases).
 2. Open the `.dmg` and drag **MoScribe** into *Applications*.
 3. First launch only: the build is not notarised, so macOS blocks it. Right-click the
    app → **Open** → **Open**, or allow it under *System Settings → Privacy & Security*
@@ -48,7 +68,7 @@ reference target; the others are produced by the same workflow.
 
 ### Windows
 
-1. Download `MoScribe-<version>-windows-x64-setup.exe` from
+1. Download [`MoScribe-windows-x64-setup.exe`](https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-windows-x64-setup.exe) from
    [Releases](https://github.com/mokmail/moscribe/releases) and run it.
 2. The installer is unsigned, so SmartScreen shows "Windows protected your PC" —
    click **More info → Run anyway**.
@@ -66,7 +86,8 @@ reference target; the others are produced by the same workflow.
 ### Linux
 
 ```bash
-tar -xzf MoScribe-<version>-linux-x64.tar.gz
+curl -LO https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-linux-x64.tar.gz
+tar -xzf MoScribe-linux-x64.tar.gz
 cd MoScribe
 ./MoScribe --fetch-models     # once, ~2.8 GB
 ./MoScribe                    # opens http://127.0.0.1:8770
