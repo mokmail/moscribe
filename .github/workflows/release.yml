@@ -160,7 +160,11 @@ jobs:
         shell: bash
         run: |
           cd dist
-          for f in *.dmg *.tar.gz *setup.exe *.zip; do [ -f "$f" ] && sha256sum "$f" >> SHA256SUMS.txt; done
+          # macOS has no sha256sum, only shasum -a 256
+          hash_one() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi; }
+          for f in *.dmg *.tar.gz *setup.exe *.zip; do
+            [ -f "$f" ] && hash_one "$f" >> SHA256SUMS.txt
+          done
           cat SHA256SUMS.txt || true
 
       - name: Publish this platform
