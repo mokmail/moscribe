@@ -19,6 +19,9 @@ permissions:
 
 env:
   VIBEASR_REF: main
+  # Windows consoles are cp1252; keep Python's stdio UTF-8 so log text never kills a step
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
 
 jobs:
   build:

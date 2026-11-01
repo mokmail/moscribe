@@ -82,7 +82,7 @@ def main() -> int:
             print(f"  ! {name} not built under {src}")
             continue
         shutil.copy2(hit, out / hit.name)
-        print(f"  {name} ← {hit.relative_to(src)}")
+        print(f"  {name} <- {hit.relative_to(src)}")
         found += 1
 
     libs = _find(src, WIN_GLOBS if os.name == "nt" else LIB_GLOBS)

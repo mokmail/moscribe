@@ -14,6 +14,12 @@ from pathlib import Path
 
 from . import paths
 
+# Windows consoles are cp1252: never let a bullet or arrow kill a download
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # noqa: BLE001 - older/odd streams
+    pass
+
 HF = "https://huggingface.co"
 
 MODELS: list[tuple[str, str, float]] = [
