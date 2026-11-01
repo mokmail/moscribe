@@ -100,12 +100,39 @@ def _download(url: str, dest: Path, label: str) -> None:
     print(f"\r  {label:<22} done — {human(dest.stat().st_size)}" + " " * 20)
 
 
+def _already_have(rel: str) -> Path | None:
+    """Ask the engines where they actually load from before downloading again."""
+    try:
+        if rel.startswith("vibeasr/"):
+            from . import asr_engine
+
+            wanted = asr_engine.VAE_MODEL if "vae" in rel else asr_engine.LM_MODEL
+            return wanted if wanted.exists() else None
+        if rel.startswith("llm/"):
+            from .llm import LLM_ENGINE
+
+            return LLM_ENGINE.model if LLM_ENGINE.model.exists() else None
+        if rel.startswith("spk/"):
+            from .spk_embed import EMBEDDER
+
+            candidate = Path(EMBEDDER.model_path)
+            return candidate if candidate.exists() else None
+    except Exception:  # noqa: BLE001 - a broken engine import just means "download it"
+        return None
+    return None
+
+
 def fetch_models(force: bool = False) -> int:
     root = paths.models_dir()
     print(f"  models → {root}")
     missing = 0
     for rel, url, _mb in MODELS:
         dest = root / rel
+        if not force:
+            elsewhere = _already_have(rel)
+            if elsewhere is not None:
+                print(f"  {dest.name:<30} present ({human(elsewhere.stat().st_size)}, {elsewhere.parent})")
+                continue
         if dest.exists() and dest.stat().st_size > 1024 and not force:
             print(f"  {dest.name:<30} present ({human(dest.stat().st_size)})")
             continue

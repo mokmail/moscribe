@@ -69,9 +69,29 @@ _MODEL_CANDIDATES = [
     DATA_DIR / "models" / "vibeasr",
     _LEGACY_ROOT / "models" / "vibeasr",
 ]
-MODELS_DIR = next((c for c in _MODEL_CANDIDATES if c and c.exists()), _MODEL_CANDIDATES[1])
-VAE_MODEL = MODELS_DIR / "vibeasr-vae-encoder-i8_s.gguf"
-LM_MODEL = MODELS_DIR / "vibeasr-lm-i2_s-embed-q6_k.gguf"
+_MODEL_DIRS = [c for c in _MODEL_CANDIDATES if c]
+MODELS_DIR = next((c for c in _MODEL_DIRS if c.exists()), _MODEL_DIRS[1])
+
+VAE_NAME = "vibeasr-vae-encoder-i8_s.gguf"
+LM_NAME = "vibeasr-lm-i2_s-embed-q6_k.gguf"
+
+
+def _model_file(name: str) -> Path:
+    """Per-file, not per-directory: a half-populated folder must not force a re-download."""
+    for directory in _MODEL_DIRS:
+        candidate = directory / name
+        if candidate.exists():
+            return candidate
+    return _MODEL_DIRS[1] / name
+
+
+def resolve_models() -> tuple[Path, Path]:
+    """Re-check on demand: a first-run download lands after import."""
+    return _model_file(VAE_NAME), _model_file(LM_NAME)
+
+
+VAE_MODEL = _model_file(VAE_NAME)
+LM_MODEL = _model_file(LM_NAME)
 
 
 @dataclass(frozen=True)
@@ -198,7 +218,8 @@ class AsrEngine:
             if alive:
                 await self._stop_locked()
 
-            cmd = [str(BIN), "--vae-model", str(VAE_MODEL), "--lm-model", str(LM_MODEL),
+            vae, lm = resolve_models()
+            cmd = [str(BIN), "--vae-model", str(vae), "--lm-model", str(lm),
                    "-t", str(cfg.threads), "--max-tokens", str(cfg.max_tokens),
                    "--prompt-format", cfg.prompt_format]
             cmd += ["--greedy"] if cfg.greedy else [
