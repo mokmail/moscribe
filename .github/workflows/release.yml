@@ -78,7 +78,8 @@ jobs:
           # leaves 3rdparty/llama.cpp empty and cmake dies on add_subdirectory
           git submodule update --init --recursive --depth 1
           python -m pip install -q gguf || true
-          if [ -f setup_env.py ]; then python setup_env.py || true; fi
+          # their setup_env.py runs its own bare cmake configure, which collides
+          # with the generator flags set below (Windows: "generator platform: x64")
           if [ "$RUNNER_OS" = "Windows" ]; then GEN=(-G "Visual Studio 17 2022" -A x64); else GEN=(); fi
           cmake -S . -B build "${GEN[@]}" -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF
           cmake --build build --config Release --target asr_stream_server -j 4
@@ -111,6 +112,18 @@ jobs:
       - name: Package — Linux
         if: runner.os == 'Linux'
         run: |
+          mkdir -p dist/MoScribe/share/applications dist/MoScribe/share/icons
+          cp moscribe/static/brand/app-512.png dist/MoScribe/share/icons/moscribe.png
+          cat > dist/MoScribe/share/applications/moscribe.desktop <<'DESK'
+          [Desktop Entry]
+          Type=Application
+          Name=MoScribe
+          Comment=Local speech to text
+          Exec=MoScribe
+          Icon=moscribe
+          Terminal=false
+          Categories=AudioVideo;Audio;Utility;
+          DESK
           tar -C dist -czf "dist/MoScribe-${{ steps.ver.outputs.value }}-${{ matrix.tag }}.tar.gz" MoScribe
           (cd bin && zip -r "../dist/moscribe-${{ matrix.tag }}-bin.zip" .)
           chmod +x dist/MoScribe/MoScribe

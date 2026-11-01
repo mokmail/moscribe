@@ -20,6 +20,7 @@ if [ ! -d "$APP" ]; then
     echo "     .venv/bin/pyinstaller --clean --noconfirm packaging/moscribe.spec" >&2
     exit 1
   fi
+  "$PY" packaging/make_icons.py
   "$PY" -c "import PyInstaller" >/dev/null 2>&1 || {
     echo "   installing pyinstaller + pillow into .venv"
     "$PY" -m pip install -q pyinstaller pillow
@@ -36,6 +37,13 @@ fi
 STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/MoScribe.app"
 ln -s /Applications "$STAGE/Applications"
+
+# the mounted disk shows the kmail mark, not the generic disk icon
+ICNS="$ROOT/moscribe/static/brand/app.icns"
+if [ -f "$ICNS" ]; then
+  cp "$ICNS" "$STAGE/.VolumeIcon.icns"
+  command -v SetFile >/dev/null && SetFile -a C "$STAGE" || true
+fi
 
 # ad-hoc signature: enough for Gatekeeper to accept a locally built bundle
 codesign --force --deep --sign - "$STAGE/MoScribe.app" 2>/dev/null || echo "  (codesign skipped)"

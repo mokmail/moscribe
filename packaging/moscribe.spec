@@ -18,6 +18,18 @@ APP = ROOT / "moscribe"
 
 datas = [(str(APP / "static"), "static")]
 
+BRAND = APP / "static" / "brand"
+if sys.platform == "darwin":
+    ICON = BRAND / "app.icns"
+elif os.name == "nt":
+    ICON = BRAND / "app.ico"
+else:
+    ICON = BRAND / "app-512.png"
+ICON = Path(os.environ.get("MOSCRIBE_ICON", ICON)) if os.environ.get("MOSCRIBE_ICON") else ICON
+if not ICON.exists():
+    print(f"  ! icon missing: {ICON} — run python packaging/make_icons.py")
+    ICON = None
+
 bin_dir = Path(os.environ.get("MOSCRIBE_BIN_DIR", ROOT / "bin"))
 if bin_dir.is_dir():
     datas.append((str(bin_dir), "bin"))
@@ -64,6 +76,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
+    icon=str(ICON) if ICON else None,
     console=sys.platform != "darwin",   # no stray terminal window on macOS
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -85,7 +98,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="MoScribe.app",
-        icon=os.environ.get("MOSCRIBE_ICON") or None,
+        icon=str(ICON) if ICON else None,
         bundle_identifier="at.kmail.moscribe",
         info_plist={
             "CFBundleName": "MoScribe",
