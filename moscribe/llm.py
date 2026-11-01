@@ -150,10 +150,16 @@ class LLM:
         found: list[dict] = []
         seen: set[str] = set()
         for path in sorted(MODELS_DIR.glob("*.gguf")) if MODELS_DIR.exists() else []:
-            found.append({"name": path.name, "path": str(path),
-                          "mb": round(path.stat().st_size / 1e6, 1),
-                          "active": path.resolve() == self.model.resolve()})
-            seen.add(str(path.resolve()))
+            try:
+                size_mb = round(path.stat().st_size / 1e6, 1)      # broken symlink / removed file
+            except OSError:
+                continue
+            try:
+                active = path.resolve() == self.model.resolve()
+            except OSError:
+                active = False
+            found.append({"name": path.name, "path": str(path), "mb": size_mb, "active": active})
+            seen.add(str(path))
         default = self._default_model
         if default.exists() and str(default.resolve()) not in seen:
             found.insert(0, {"name": default.name, "path": str(default),
@@ -231,9 +237,14 @@ class LLM:
                     await asyncio.sleep(0.2)
             self.resolve_binary()
             if not self.binary.exists() or not self.model.exists():
-                self._last_error = ("llama-server or GGUF missing — build "
-                                    "~/apps/VibeASR.cpp (LLAMA_BUILD_SERVER=ON) and fetch "
-                                    "microsoft/BitNet-b1.58-2B-4T-gguf")
+                missing = []
+                if not self.binary.exists():
+                    missing.append(f"llama-server at {self.binary}")
+                if not self.model.exists():
+                    missing.append(f"{self.model.name} at {self.model}")
+                self._last_error = ("text engine not installed: " + "; ".join(missing)
+                                    + " — run `moscribe --fetch-models`, or just restart the app"
+                                    " and it will download them")
                 return False
             try:
                 if self._proc and self._proc.poll() is None:

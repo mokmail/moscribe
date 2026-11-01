@@ -16,9 +16,9 @@ recognition and llama.cpp for text. Built by [kmail.at](https://kmail.at).
 | Platform | File | Status |
 | --- | --- | --- |
 | **macOS · Apple silicon** | [MoScribe-macos-arm64.dmg](https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-macos-arm64.dmg) | ✅ ready |
+| **Windows 10/11 x64** | [MoScribe-windows-x64-setup.exe](https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-windows-x64-setup.exe) · [portable .zip](https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-windows-x64.zip) | ✅ ready |
 | **Linux x64** | [MoScribe-linux-x64.tar.gz](https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-linux-x64.tar.gz) | ✅ ready |
-| macOS · Intel | `MoScribe-macos-x64.dmg` | ⏳ builds in CI (macos-13 runner) — use [source](#from-source-any-os) for now |
-| Windows 10/11 x64 | `MoScribe-windows-x64-setup.exe` · `MoScribe-windows-x64.zip` | ⏳ builds in CI (MinGW) — use [Docker](#docker-server-nas-headless) or [source](#from-source-any-os) for now |
+| macOS · Intel | `MoScribe-macos-x64.dmg` | ⏳ GitHub's macos-13 runners are scarce — use [source](#from-source-any-os) or Rosetta-free Docker for now |
 
 Engines only, for a `pip install` — `moscribe --fetch-models` pulls the matching
 `moscribe-<platform>-bin.zip` automatically:
@@ -73,10 +73,8 @@ workflow and may land a few minutes after it.
 
 ### Windows
 
-1. Grab `MoScribe-windows-x64-setup.exe` from [Releases](https://github.com/mokmail/moscribe/releases)
-   and run it. If it is not there yet, use [Docker](#docker-server-nas-headless) or
-   [From source](#from-source-any-os) — the Windows engine build is still being
-   worked on upstream (VibeASR.cpp rejects MSVC).
+1. Download [MoScribe-windows-x64-setup.exe](https://github.com/mokmail/moscribe/releases/latest/download/MoScribe-windows-x64-setup.exe)
+   and run it (or unzip the portable build anywhere).
 2. The installer is unsigned, so SmartScreen shows "Windows protected your PC" —
    click **More info → Run anyway**.
 3. If you picked the desktop shortcut option, launch it; otherwise use the Start-menu
