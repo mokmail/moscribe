@@ -205,6 +205,7 @@ rm -rf "/Applications/MoScribe.app" "$HOME/Library/Application Support/MoScribe"
 | Windows: SmartScreen blocks the setup | **More info → Run anyway** (unsigned build) |
 | Microphone permission denied | macOS: *System Settings → Privacy & Security → Microphone*; browser-only tabs also need the site permission |
 | Port 8770 busy | `moscribe --port 8780` picks the next free port automatically |
+| Live recording refuses to connect (`ws://…/ws/live failed`, 404) | uvicorn was installed without its WebSocket backend — `pip install "uvicorn[standard]"` (already implied by the app's own dependencies; a hand-rolled venv can miss it) |
 | First transcription is slow | models load lazily; the app warms them at boot, or call `POST /api/engine/warmup` |
 
 ## Use

@@ -221,9 +221,20 @@ async def warm_text_model():
     asyncio.create_task(_warm())
 
 
+def _websocket_impl() -> str | None:
+    """Which WS backend uvicorn will use, if any. Bare uvicorn has none -> 404s."""
+    for name in ("websockets", "wsproto"):
+        try:
+            __import__(name)
+            return name
+        except ImportError:
+            continue
+    return None
+
+
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "engine": ENGINE.info(), "diarizer": describe_status(),
+    return {"ok": True, "websockets": _websocket_impl(), "engine": ENGINE.info(), "diarizer": describe_status(),
             "text_model": LLM_ENGINE.info(), "time": time.time()}
 
 

@@ -608,11 +608,28 @@
 
   /* ------------------------------------------------------------- health */
 
+  let wsWarned = false;
+
+  function noteWebsocketSupport(d) {
+    if (!d || !("websockets" in d) || wsWarned) return;
+    if (d.websockets === null) {
+      wsWarned = true;
+      toast("This server has no WebSocket support — live transcription is disabled. "
+          + "Install it with: pip install 'uvicorn[standard]'", true);
+      const orb = $("micBtn");
+      if (orb) {
+        orb.disabled = true;
+        orb.title = "server lacks WebSocket support (pip install 'uvicorn[standard]')";
+      }
+    }
+  }
+
   async function pollHealth() {
     try {
       const r = await fetch("/api/health", { cache: "no-store" });
       const h = await r.json();
       S.health = h;
+      noteWebsocketSupport(h);
       const e = h.engine || {};
       const pe = $("pillEngine");
       if (e.state === "ready") { pe.dataset.state = "ok"; pe.querySelector("em").textContent = "ready"; }
