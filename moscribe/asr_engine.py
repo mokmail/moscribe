@@ -307,12 +307,64 @@ class AsrEngine:
 
 # ------------------------------------------------------------------ audio IO
 
+def _read_wav(path: Path) -> np.ndarray:
+    """WAV without external tools: 8/16/24/32-bit PCM, any channel count."""
+    import wave
+
+    with wave.open(str(path)) as w:
+        ch, width, rate = w.getnchannels(), w.getsampwidth(), w.getframerate()
+        raw = w.readframes(w.getnframes())
+    if not raw:
+        raise EngineError("audio file decoded to 0 samples")
+    if width == 1:
+        data = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+    elif width == 2:
+        data = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    elif width == 3:
+        buf = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 3).astype(np.int32)
+        ints = buf[:, 0] | (buf[:, 1] << 8) | (buf[:, 2] << 16)
+        ints = np.where(ints >= 1 << 23, ints - (1 << 24), ints)
+        data = ints.astype(np.float32) / float(1 << 23)
+    elif width == 4:
+        data = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+    else:
+        raise EngineError(f"unsupported WAV sample width: {width}")
+
+    if ch > 1:
+        data = data.reshape(-1, ch).mean(axis=1)
+    if rate != SAMPLE_RATE and data.size:
+        n = max(1, int(round(data.size * SAMPLE_RATE / rate)))
+        x = np.linspace(0, data.size - 1, n, dtype=np.float32)
+        data = np.interp(x, np.arange(data.size, dtype=np.float32), data).astype(np.float32)
+    return np.ascontiguousarray(data, dtype=np.float32)
+
+
 def decode_to_float(path: str | Path) -> np.ndarray:
-    """Any input format -> mono float32 @ 24 kHz, via ffmpeg."""
+    """Any input format -> mono float32 @ 24 kHz.
+
+    WAV is decoded in-process, so the app works on a machine with no ffmpeg.
+    Everything else goes through ffmpeg, with a message that says so.
+    """
     import subprocess
-    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-i", str(path),
+
+    src = Path(path)
+    if src.suffix.lower() == ".wav":
+        try:
+            return _read_wav(src)
+        except EngineError:
+            raise
+        except Exception:  # noqa: BLE001 - odd containers fall back to ffmpeg
+            pass
+
+    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-i", str(src),
            "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", str(SAMPLE_RATE), "-"]
-    proc = subprocess.run(cmd, capture_output=True)
+    try:
+        proc = subprocess.run(cmd, capture_output=True)
+    except FileNotFoundError as exc:
+        raise EngineError(
+            "ffmpeg is not installed — WAV files work without it, but mp3, m4a, mp4 "
+            "and similar need it (brew install ffmpeg / apt install ffmpeg / winget install ffmpeg)"
+        ) from exc
     if proc.returncode != 0:
         msg = proc.stderr.decode("utf-8", "replace").strip().splitlines()
         raise EngineError(msg[-1] if msg else "ffmpeg could not decode the audio")

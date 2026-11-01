@@ -9,7 +9,7 @@
 FROM ubuntu:22.04 AS engines
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake git ca-certificates python3 patchelf \
+        build-essential cmake git ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # llama.cpp and gguf-py are submodules: a shallow clone without them leaves
@@ -25,14 +25,12 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF \
     && mkdir -p /out/bin \
     && cp build/bin/asr_stream_server build-llm/bin/llama-server /out/bin/ \
     && (find /src -name 'libllama.so*' -o -name 'libggml.so*' | xargs -r -I{} cp -n {} /out/bin/ || true) \
-    && chmod +x /out/bin/* \
-    && for exe in /out/bin/asr_stream_server /out/bin/llama-server; do \
-         patchelf --set-rpath '$$ORIGIN' "$$exe"; \
-       done \
-    && patchelf --print-rpath /out/bin/llama-server \
-    && patchelf --print-rpath /out/bin/asr_stream_server
+    && chmod +x /out/bin/*
 
 # ---------- app ----------
+# The engines link @rpath/libllama.so and libggml.so; both sit in /app/bin, so
+# LD_LIBRARY_PATH (below) is what resolves them at runtime. Doing it here instead
+# of with patchelf avoids the Dockerfile $$ escaping trap that silently broke it.
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
     MOSCRIBE_DATA=/data \
@@ -41,7 +39,7 @@ ENV PYTHONUNBUFFERED=1 \
     LD_LIBRARY_PATH=/app/bin \
     OMP_NUM_THREADS=4
 
-RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

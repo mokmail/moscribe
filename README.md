@@ -52,6 +52,7 @@ workflow and may land a few minutes after it.
 | CPU | any x86-64 or Apple-silicon CPU — no GPU, no CUDA, no Metal needed |
 | RAM | 8 GB free (models stay resident: about 3 GB) |
 | Disk | ~3 GB for models, plus your recordings and transcripts |
+| Optional | `ffmpeg` — only for mp3/m4a/mp4 input; WAV is decoded in-process |
 | Network | only for the one-time model download |
 
 ### macOS
@@ -213,7 +214,8 @@ Start it (`moscribe`, or the app icon); it opens `http://127.0.0.1:8770`.
 - **Live** — press the orb or <kbd>Space</kbd>. Speech lands every 8–10 s. Press
   again to stop: the tail window still transcribes, and a `transcribing` chip stays
   up until the transcript is genuinely final.
-- **Upload** — drop wav, mp3, m4a, flac, ogg or mp4 (max 600 MB).
+- **Upload** — drop wav, mp3, m4a, flac, ogg or mp4 (max 600 MB). WAV needs nothing
+  extra; compressed formats use `ffmpeg` if it is installed.
 - **Speakers** — WeSpeaker voiceprints plus clustering give each voice a colour and
   a name you can rename inline; names carry into copy/export.
 - **Prompts** — ten presets (meeting, stand-up, interview, lecture, Austrian public
