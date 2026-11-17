@@ -43,9 +43,10 @@ from .diarization import (
     DEFAULT_THRESHOLD,
     SpeakerCluster,
     describe_status,
-    diarize_audio,
+    diarize_audio_detailed,
     group_turns,
     render_turns,
+    speaker_stats,
     split_text_by_speaker,
     vad_segments,
 )
@@ -386,14 +387,17 @@ async def create_job(
         audio = await asyncio.to_thread(condition_audio, audio, SAMPLE_RATE)
 
     spans = None
+    spans_detail = None
     if speaker_separation == "on" and EMBEDDER.available:
         try:
-            spans = await asyncio.to_thread(
-                diarize_audio, audio, SAMPLE_RATE,
+            spans_detail = await asyncio.to_thread(
+                diarize_audio_detailed, audio, SAMPLE_RATE,
                 max(0.55, min(0.95, float(speaker_sensitivity))),
                 max(2, min(8, int(max_speakers))))
+            spans = [(d["start"], d["end"], d["speaker"]) for d in spans_detail]
         except Exception:  # noqa: BLE001 - fall back to a fixed grid
             spans = None
+            spans_detail = None
 
     if spans:
         plan = plan_chunks_by_speaker(spans, len(audio) / SAMPLE_RATE,
@@ -422,6 +426,7 @@ async def create_job(
         "bytes": size,
         "speaker_separation": speaker_separation == "on",
         "spans": spans,
+        "spans_detail": spans_detail,
         "speaker_threshold": max(0.55, min(0.95, float(speaker_sensitivity))),
         "max_speakers": max(2, min(8, int(max_speakers))),
         "detect_language": _flag(detect_language),
@@ -463,6 +468,8 @@ async def transcribe_sync(
     _record(job, text, segs)
     return {"text": text, "segments": segs, "turns": job.get("turns", []),
             "speakers": job.get("speakers", 0),
+            "speaker_stats": job.get("speaker_stats", []),
+            "speaker_confidence": job.get("speaker_confidence", {}),
             "language": job.get("language") or langid.merge([]),
             "duration": job["duration"],
             "rtf": round(total_rtf, 3), "job_id": job["id"]}
@@ -480,6 +487,8 @@ def _record(job: dict, text: str, segments: list[dict]) -> None:
         "rtf": round(sum(s.get("rtf", 0) for s in segments), 3),
         "words": len(text.split()),
         "language": job.get("language"),
+        "speaker_stats": job.get("speaker_stats", []),
+        "speaker_confidence": job.get("speaker_confidence", {}),
         "text": text,
         "segments": segments,
     })
@@ -547,10 +556,12 @@ async def _run_job(job: dict, on_token=None, on_chunk=None,
                 if on_chunk:
                     await on_chunk({"phase": "diarizing"}, committed)
                 full = await asyncio.to_thread(_read_source_audio, job)
-                spans = await asyncio.to_thread(
-                    diarize_audio, full, SAMPLE_RATE,
+                detail = await asyncio.to_thread(
+                    diarize_audio_detailed, full, SAMPLE_RATE,
                     job.get("speaker_threshold", DEFAULT_THRESHOLD),
                     job.get("max_speakers", 6))
+                job["spans_detail"] = detail
+                spans = [(d["start"], d["end"], d["speaker"]) for d in detail]
             detailed: list[dict] = []
             for seg in segments:
                 speaker = seg.get("speaker")
@@ -577,11 +588,33 @@ async def _run_job(job: dict, on_token=None, on_chunk=None,
                         turn["lang"] = info["code"]
             job["turns"] = turns
             job["speakers"] = len({t["speaker"] for t in turns if t.get("speaker", -1) >= 0})
+            job["speaker_stats"] = speaker_stats(turns)
+            job["speaker_confidence"] = _speaker_confidence(job.get("spans_detail"))
             committed = render_turns(turns, labels=True)
         except Exception as exc:  # noqa: BLE001 - diarisation is best-effort
             job["diarization_error"] = f"{type(exc).__name__}: {exc}"
 
     return committed, segments, total_rtf
+
+
+def _speaker_confidence(detail: list[dict] | None) -> dict[str, float]:
+    """Duration-weighted mean label confidence per speaker, as ``{"0": 0.87}``.
+
+    Confidence is not cosmetic: a turn labelled at 0.35 is a guess and the UI says
+    so, instead of presenting a coin flip as a fact.
+    """
+    if not detail:
+        return {}
+    acc: dict[int, float] = {}
+    weight: dict[int, float] = {}
+    for d in detail:
+        spk = d.get("speaker")
+        if spk is None or int(spk) < 0:
+            continue
+        dur = float(d.get("duration") or 1.0)
+        acc[int(spk)] = acc.get(int(spk), 0.0) + float(d.get("confidence") or 0.0) * dur
+        weight[int(spk)] = weight.get(int(spk), 0.0) + dur
+    return {str(k): round(acc[k] / max(weight[k], 1e-9), 3) for k in sorted(acc)}
 
 
 def _chunk_is_silent(path: str | Path) -> bool:
@@ -672,6 +705,8 @@ async def job_socket(ws: WebSocket, job_id: str):
     await ws.send_json({
         "type": "done", "text": text, "segments": segments,
         "turns": job.get("turns", []), "speakers": job.get("speakers", 0),
+        "speaker_stats": job.get("speaker_stats", []),
+        "speaker_confidence": job.get("speaker_confidence", {}),
         "language": job.get("language"),
         "duration": job["duration"], "elapsed": round(elapsed, 2),
         "rtf": round(elapsed / job["duration"], 3) if job["duration"] else None,
@@ -864,6 +899,7 @@ async def live_socket(ws: WebSocket):
                         "speakers": state["cluster"].speaker_count if state["cluster"] else 0,
                         "windows": state["seq"], "words": len(text.split()),
                         "language": langid.merge(state["langs"]),
+                        "speaker_stats": speaker_stats(turns),
                         "duration": round(time.time() - state["started"], 1),
                     })
                     break
@@ -880,6 +916,7 @@ async def live_socket(ws: WebSocket):
                 "duration": round(time.time() - state["started"], 1),
                 "rtf": None, "words": len(text.split()), "text": text,
                 "language": langid.merge(state["langs"]),
+                "speaker_stats": speaker_stats(turns),
                 "segments": state["segments"], "turns": turns,
                 "speakers": len({t["speaker"] for t in turns if t.get("speaker", -1) >= 0}),
             })

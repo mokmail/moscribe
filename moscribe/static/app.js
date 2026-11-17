@@ -142,6 +142,8 @@
     follow: true,
     health: null,
     language: null,
+    speakerStats: [],
+    speakerConfidence: {},
     mic: {
       active: false, ctx: null, stream: null, node: null, gain: null, ws: null,
       buf: [], bufLen: 0, inflight: false, firstWindow: true, t0: 0,
@@ -556,9 +558,22 @@
     });
     if (seen.length < 2) { legend.classList.add("hidden"); legend.innerHTML = ""; return; }
     legend.classList.remove("hidden");
+    const stats = new Map((S.speakerStats || []).map((s) => [s.speaker, s]));
+    const conf = S.speakerConfidence || {};
     legend.innerHTML = seen.map((spk) => {
       const n = S.turns.filter((t) => t.speaker === spk).length;
-      return `<span class="legendChip" style="--c:${speakerColor(spk)}">${esc(speakerLabel(spk))} · ${n}</span>`;
+      const st = stats.get(spk);
+      const bits = [esc(speakerLabel(spk))];
+      if (st && st.seconds) bits.push(fmtTime(st.seconds));
+      bits.push(`${n} turn${n === 1 ? "" : "s"}`);
+      const c = conf[String(spk)];
+      // A label below 50 % is a guess; showing the number is more honest than
+      // hiding it and more useful than dropping the speaker entirely.
+      const weak = c != null && c < 0.5;
+      const pct = c != null ? ` · <em title="how clearly the voiceprints separated this speaker">${Math.round(c * 100)}%</em>` : "";
+      const title = st ? `${st.words} words · ${Math.round((st.share || 0) * 100)}% of speech` : "";
+      return `<span class="legendChip${weak ? " weak" : ""}" style="--c:${speakerColor(spk)}" title="${esc(title)}">` +
+             `${bits.join(" · ")}${pct}</span>`;
     }).join("");
   }
 
@@ -634,6 +649,8 @@
     S.names = {};
     S.currentChunk = -1;
     S.language = null;
+    S.speakerStats = [];
+    S.speakerConfidence = {};
     renderLanguage(null);
     $("docTitle").textContent = "Untitled session";
     delete $("docMeta").dataset.custom;
@@ -822,6 +839,8 @@
         S.rtf = m.rtf || S.rtf;
         S.duration = m.duration || S.duration;
         if (m.language) renderLanguage(m.language);
+        S.speakerStats = m.speaker_stats || [];
+        S.speakerConfidence = m.speaker_confidence || {};
         $("progressFill").style.width = "100%";
         $("jobProgress").textContent = m.cancelled
           ? "stopped"
@@ -1084,6 +1103,7 @@
         if (!settings.speakerSep || settings.speakerSep === "off") S.turns = [];
         if (msg.duration) S.duration = msg.duration;
         if (msg.language) renderLanguage(msg.language);
+        S.speakerStats = msg.speaker_stats || [];
         setFinishing(false);
         $("micHint").textContent = "Tap the mic and start talking";
         setPhase("ready");
@@ -1570,6 +1590,8 @@
           }
           S.duration = it.duration || 0;
           S.rtf = it.rtf || null;
+          S.speakerStats = it.speaker_stats || [];
+          S.speakerConfidence = it.speaker_confidence || {};
           renderLanguage(it.language || null);
           $("docTitle").textContent = it.title || "transcript";
           $("docMeta").textContent = `${it.mode === "live" ? "live dictation" : "uploaded file"} · ${new Date((it.created || 0) * 1000).toLocaleString()}`;

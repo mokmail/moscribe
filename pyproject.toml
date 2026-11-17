@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "moscribe"
-version = "1.1.0"
+version = "1.2.0"
 description = "Local speech to text with speaker separation and on-device summaries"
 readme = "README.md"
 requires-python = ">=3.10"

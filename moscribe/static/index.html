@@ -404,7 +404,7 @@
           <p>The browser records 24 kHz mono audio and cuts a window at the quietest point near the boundary, so words are not sliced mid-syllable.</p></li>
         <li><span class="pipeDot" style="--c:#8b5cf6">2</span>
           <strong>Voices</strong>
-          <p>WeSpeaker ResNet34 turns each utterance into a 256-dimension voiceprint; clustering groups them into speakers. Uploads are cut at speaker turns, so a label is right by construction.</p></li>
+          <p>WeSpeaker ResNet34 turns each utterance into a 256-dimension voiceprint; clustering groups them into speakers. A quick back-and-forth with no pause between speakers is split where the voice actually changes, and uploads are cut at those boundaries so a label is right by construction.</p></li>
         <li><span class="pipeDot" style="--c:#ec4899">3</span>
           <strong>Recognition</strong>
           <p>Each window is DC-corrected, high-passed at 70 Hz and level-normalised first, then VibeASR.cpp — VibeVoice-ASR-BitNet, 1.58 GB — transcribes it on the CPU, faster than real time. Windows with no speech are skipped rather than invented.</p></li>
@@ -425,7 +425,7 @@
       <div class="helpGrid">
         <article><h3>Live</h3><p>Press the orb or <kbd>Space</kbd>. Speak normally; text lands roughly every ten seconds. Press again to finish — the last window is transcribed before the session closes.</p></article>
         <article><h3>Upload</h3><p>Drop a wav, mp3, m4a, flac, ogg or mp4. Windows are planned at speaker turns and transcribed in order; the progress bar counts them.</p></article>
-        <article><h3>Speakers</h3><p>Each voice gets a colour and a name. Click a name to rename it — the change carries into copy and export. Names the app hears in an introduction ("my name is Anna") are offered as a suggestion, never applied silently.</p></article>
+        <article><h3>Speakers</h3><p>Each voice gets a colour and a name. Click a name to rename it — the change carries into copy and export. The legend shows talk time, turn count and how clearly that voice separated; a weak chip means the label is a guess. Names the app hears in an introduction ("my name is Anna") are offered as a suggestion, never applied silently.</p></article>
         <article><h3>Prompts</h3><p>Context biases recognition toward names and jargon. Pick a preset (meeting, clinical, legal, Amtsdeutsch…) or write your own, then apply it. The active prompt is shown as a tag.</p></article>
         <article><h3>Language</h3><p>The language pill shows what was identified and how sure the app is. A mixed recording names both languages, and a turn that switches language is tagged inline. Detection runs on the transcript text, so it never slows transcription down.</p></article>
         <article><h3>AI actions</h3><p>Summarize, Minutes, Action items, Clean up, translate, or ask your own question. Results stream in the side panel and can be copied, downloaded as .txt/.md/.json, mailed, or shared.</p></article>

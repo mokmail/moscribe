@@ -580,6 +580,9 @@ textarea::placeholder, input::placeholder { color: var(--faint); }
   box-shadow: var(--shadow-1);
 }
 .legendChip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--muted)); }
+.legendChip em { font-style: normal; font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.legendChip.weak { border-color: rgba(180, 83, 9, .35); background: #fdf7ee; }
+.legendChip.weak em { color: var(--amber); font-weight: 500; }
 
 /* --------------------------------------------------------- transcript */
 

@@ -106,7 +106,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "MoScribe",
             "CFBundleDisplayName": "MoScribe",
-            "CFBundleShortVersionString": "1.1.0",
+            "CFBundleShortVersionString": "1.2.0",
             "LSMinimumSystemVersion": "12.0",
             "NSMicrophoneUsageDescription": "MoScribe transcribes speech on this machine only.",
             "NSHighResolutionCapable": True,

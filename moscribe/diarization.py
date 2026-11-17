@@ -33,6 +33,18 @@ HOP = 240            # 10 ms hop
 DEFAULT_THRESHOLD = 0.78     # cosine similarity needed to call it the same voice
 MIN_EMBED_SEC = 0.45         # shorter spans are unreliable -> inherit neighbour
 
+# Speaker-change detection inside one merged span. VAD splits at pauses; two people
+# taking turns with less than `min_silence` between them land in a single span, and
+# one label then covers both. Probe windows find where the voice actually changes.
+PROBE_WIN = 0.9              # seconds per probe window
+PROBE_HOP = 0.3              # probe stride
+CHANGE_SIM = 0.55            # adjacent probes below this = a change point candidate
+SAME_VOICE_SIM = 0.55        # halves of a genuine single-speaker span score above this
+LOCAL_PROBES = 3             # probes each side used to confirm a cut
+MAX_CUTS = 8                 # hard ceiling: no span holds more turns than this
+REFINE_MIN_SEC = 2.6         # shorter spans cannot hold two turns
+REFINE_MIN_PIECE = 1.0       # never emit a sliver around a cut
+
 
 # --------------------------------------------------------------------- VAD
 
@@ -143,26 +155,81 @@ def _renumber(labels: list[int]) -> list[int]:
     return out
 
 
-def cluster_embeddings(embs: list[np.ndarray | None], durations: list[float] | None = None,
-                       threshold: float = DEFAULT_THRESHOLD,
-                       max_speakers: int = 6,
-                       prune_below: float = 2.0) -> list[int]:
-    """Average-linkage agglomerative clustering + k-means refinement.
+def _unit_centroids(vecs: np.ndarray, labels, weights=None) -> dict[int, np.ndarray]:
+    lab = np.asarray(labels)
+    w = np.ones(len(lab)) if weights is None else np.asarray(weights, dtype=float)
+    out: dict[int, np.ndarray] = {}
+    for u in sorted({int(x) for x in lab if x >= 0}):
+        m = lab == u
+        if not m.any():
+            continue
+        c = (vecs[m] * w[m][:, None]).sum(axis=0) / max(float(w[m].sum()), 1e-9)
+        n = float(np.linalg.norm(c))
+        out[u] = c / n if n > 1e-9 else c
+    return out
 
-    Returns a label per input, ordered by first appearance so "Speaker 1" is
-    whoever spoke first. ``None`` embeddings inherit the temporally nearest
-    labelled span (a 0.3 s "yes" is not a new person). Clusters holding less
-    than ``prune_below`` seconds of speech are folded into the nearest real
-    cluster — that is what stops coughs and door slams from inventing speakers.
+
+def _reassign(vecs: np.ndarray, labels: list[int], weights: np.ndarray,
+              iters: int = 3, margin: float = 0.04) -> list[int]:
+    """Duration-weighted centroid reassignment that abstains on a coin flip.
+
+    Plain argmax flips a span between two speakers whose centroids differ by 0.02
+    cosine, and each flip is a wrong label in the transcript. A span only moves
+    when the new centroid beats its current one by `margin` — otherwise staying put
+    is the safer answer. Long spans also carry more weight when centroids are
+    rebuilt, so a 12 s monologue defines its speaker instead of averaging with a
+    dozen clipped "mm-hm"s.
+    """
+    lab = np.asarray(labels)
+    cents = _unit_centroids(vecs, lab, weights)
+    if len(cents) < 2:
+        return [int(x) for x in lab]
+    keys = sorted(cents)
+    A = np.vstack([cents[k] for k in keys])
+    pos = {k: i for i, k in enumerate(keys)}
+
+    for _ in range(iters):
+        sims = vecs @ A.T
+        best = sims.argmax(axis=1)
+        new = np.asarray([keys[b] for b in best])
+        old_sim = np.array([sims[i, pos[int(lab[i])]] if int(lab[i]) in pos else -1.0
+                            for i in range(len(sims))])
+        # Only switch on a clear win; an unknown/absent old label may be overwritten.
+        clear = (old_sim < 0) | ((sims.max(axis=1) - old_sim) >= margin)
+        new[~clear] = lab[~clear]
+        new[lab == -1] = -1
+        if np.array_equal(new, lab):
+            break
+        lab = new
+        cents = _unit_centroids(vecs, lab, weights)
+        if len(cents) < 2:
+            break
+        keys = sorted(cents)
+        A = np.vstack([cents[k] for k in keys])
+        pos = {k: i for i, k in enumerate(keys)}
+    return [int(x) for x in lab]
+
+
+def cluster_with_confidence(embs: list[np.ndarray | None], durations: list[float] | None = None,
+                            threshold: float = DEFAULT_THRESHOLD, max_speakers: int = 6,
+                            prune_below: float = 2.0) -> tuple[list[int], list[float]]:
+    """Cluster embeddings; return labels plus a per-unit confidence in [0, 1].
+
+    ``None`` embeddings inherit the temporally nearest labelled span. Short spans
+    are attached by similarity when that is decisive and by adjacency otherwise;
+    clusters holding less than ``prune_below`` seconds of speech are folded into
+    the nearest real cluster — that is what stops coughs and door slams from
+    inventing speakers.
     """
     idx = [i for i, e in enumerate(embs) if e is not None]
     labels = [-1] * len(embs)
+    conf = [0.0] * len(embs)
     if not idx:
-        return labels
+        return labels, conf
 
     # Short utterances ("yes", "mm-hm") carry almost no speaker information and
     # used to drag whole neighbours into the wrong cluster. Cluster on the
-    # reliable spans only, then attach the short ones by nearest centroid.
+    # reliable spans only, then attach the short ones.
     RELIABLE = 0.8
     if durations is not None:
         reliable = [i for i in idx if durations[i] >= RELIABLE]
@@ -213,7 +280,7 @@ def cluster_embeddings(embs: list[np.ndarray | None], durations: list[float] | N
 
     # Fold clusters that hold too little speech.
     if durations is not None:
-        dur = np.asarray([durations[reliable[k]] for k in range(n)])
+        dur = np.asarray([durations[reliable[k]] for k in range(n)], dtype=float)
         while True:
             uniq = sorted({lab for lab in raw if lab >= 0})
             if len(uniq) <= 1:
@@ -237,19 +304,50 @@ def cluster_embeddings(embs: list[np.ndarray | None], durations: list[float] | N
                 break
             raw = [target if lab == weak else lab for lab in raw]
 
+    # Duration-weighted reassignment with an abstain rule, then renumber so
+    # "Speaker 1" is whoever spoke first.
+    weights = (np.asarray([durations[reliable[k]] for k in range(n)], dtype=float)
+               if durations is not None else np.ones(n))
+    raw = _reassign(vecs, [int(x) for x in raw], weights)
     raw = _renumber(raw)
+
+    cents = _unit_centroids(vecs, raw, weights)
+    keys = sorted(cents)
+    if len(keys) > 1:
+        A = np.vstack([cents[k] for k in keys])
+        sims = vecs @ A.T
+        order = np.argsort(-sims, axis=1)
+        for pos, i in enumerate(reliable):
+            best_i = int(order[pos, 0])
+            second_sim = float(sims[pos, order[pos, 1]]) if A.shape[0] > 1 else 0.0
+            best_sim = float(sims[pos, best_i])
+            strength = min(1.0, max(0.0, (best_sim - 0.35) / 0.45))
+            margin = min(1.0, max(0.0, (best_sim - second_sim) / 0.20))
+            conf[i] = round(0.5 * strength + 0.5 * margin, 3)
+    else:
+        for i in reliable:
+            conf[i] = 1.0
 
     for pos, i in enumerate(reliable):
         labels[i] = raw[pos]
 
-    # Attach the short spans to their nearest neighbour in time.
+    # Attach the short spans.
     #
-    # A 0.7 s fragment carries too little signal to identify anyone — cosine on
-    # it picks a cluster essentially at random, which is how a single word ended
-    # up labelled as the previous speaker. Speech is contiguous, so the safest
-    # guess is the neighbour that follows (a fragment is usually the onset of
-    # the next utterance) or, failing that, the one before.
+    # A 0.7 s fragment carries too little signal to identify anyone with an
+    # absolute threshold, but when its embedding is *decisively* closer to one
+    # centroid than the others that is better evidence than adjacency. Only fall
+    # back to the neighbour-in-time heuristic (next speaker usually owns an onset)
+    # when the similarity is ambiguous.
     for i in short:
+        emb = embs[i]
+        if emb is not None and cents:
+            ranks = sorted(((float(np.dot(emb, c)), u) for u, c in cents.items()), reverse=True)
+            best_sim, best_u = ranks[0]
+            second_sim = ranks[1][0] if len(ranks) > 1 else -1.0
+            if best_sim >= 0.50 and (best_sim - second_sim) >= 0.10:
+                labels[i] = best_u
+                conf[i] = round(min(1.0, 0.4 + (best_sim - second_sim)), 3)
+                continue
         prev_lab = next_lab = None
         for off in range(1, len(labels) + 1):
             if i - off >= 0 and labels[i - off] >= 0:
@@ -260,6 +358,7 @@ def cluster_embeddings(embs: list[np.ndarray | None], durations: list[float] | N
                 next_lab = labels[i + off]
                 break
         labels[i] = next_lab if next_lab is not None else (prev_lab if prev_lab is not None else -1)
+        conf[i] = 0.35
     # Short/unembedded spans inherit the nearest labelled neighbour.
     for i, e in enumerate(labels):
         if e >= 0:
@@ -269,10 +368,21 @@ def cluster_embeddings(embs: list[np.ndarray | None], durations: list[float] | N
             nxt = i + off
             if prev >= 0 and labels[prev] >= 0:
                 labels[i] = labels[prev]
+                conf[i] = 0.3
                 break
             if nxt < len(labels) and labels[nxt] >= 0:
                 labels[i] = labels[nxt]
+                conf[i] = 0.3
                 break
+    return labels, conf
+
+
+def cluster_embeddings(embs: list[np.ndarray | None], durations: list[float] | None = None,
+                       threshold: float = DEFAULT_THRESHOLD,
+                       max_speakers: int = 6,
+                       prune_below: float = 2.0) -> list[int]:
+    """Average-linkage agglomerative clustering + refinement (labels only)."""
+    labels, _conf = cluster_with_confidence(embs, durations, threshold, max_speakers, prune_below)
     return labels
 
 
@@ -297,14 +407,19 @@ class SpeakerCluster:
     centroid when cosine similarity clears the threshold; otherwise it starts a
     new speaker (creation order = label order, forever stable). Clips shorter
     than ``min_new`` never invent a speaker — they inherit the nearest centroid,
-    because 0.5 s of audio cannot identify anyone.
+    because 0.5 s of audio cannot identify anyone. A long span that sits between
+    ``floor`` and the threshold is treated as a familiar voice rather than a new
+    one, and it does not update the centroid.
     """
 
     def __init__(self, threshold: float = DEFAULT_THRESHOLD, max_speakers: int = 6,
-                 min_new: float = 0.9):
+                 min_new: float = 0.9, floor: float = 0.45):
         self.threshold = threshold
         self.max_speakers = max(1, int(max_speakers))
         self.min_new = min_new
+        # Below this cosine the span is unlike every known voice; between `floor`
+        # and `threshold` it is a familiar voice we are merely unsure about.
+        self.floor = floor
         self.centroids: list[np.ndarray] = []
         self.counts: list[int] = []
         self.last = -1
@@ -331,15 +446,30 @@ class SpeakerCluster:
         # voice vs 0.14-0.37 for others. So also accept a clear winner by margin,
         # which is what actually separates voices when absolute scores sag.
         decisive = sims[best] >= 0.55 and (sims[best] - runner_up) >= 0.18
-        if sims[best] >= self.threshold or decisive:
-            n = self.counts[best]
-            c = (self.centroids[best] * n + emb) / (n + 1)
-            norm = float(np.linalg.norm(c))
-            self.centroids[best] = c / norm if norm > 1e-9 else self.centroids[best]
-            self.counts[best] = n + 1
+        confident = sims[best] >= self.threshold or decisive
+
+        if confident:
+            # Only a decisive span is allowed to move a centroid: a fragment that
+            # barely matched would otherwise drag the voiceprint toward whatever
+            # the microphone heard at the edge of the window.
+            if duration >= 0.9 or (sims[best] - runner_up) >= 0.25:
+                n = self.counts[best]
+                c = (self.centroids[best] * n + emb) / (n + 1)
+                norm = float(np.linalg.norm(c))
+                self.centroids[best] = c / norm if norm > 1e-9 else self.centroids[best]
+                self.counts[best] = n + 1
             self.last = best
             return best
 
+        # A familiar-but-ambiguous span is *not* a new person. Creating a speaker
+        # on a weak match is how one voice ended up as three speakers in a long
+        # dictation: accept the best centroid, leave the centroid untouched.
+        if sims[best] >= self.floor:
+            self.last = best
+            return best
+
+        # Clearly unlike anyone so far: that is a new voice, if the span is long
+        # enough to be evidence and there is room for it.
         if duration >= self.min_new and len(self.centroids) < self.max_speakers:
             self.centroids.append(emb)
             self.counts.append(1)
@@ -542,27 +672,275 @@ def adaptive_threshold(embs: list[np.ndarray | None],
 
 
 
-def diarize_audio(audio: np.ndarray, sr: int = SR,
-                  threshold: float = DEFAULT_THRESHOLD,
-                  max_speakers: int = 6) -> list[tuple[float, float, int]]:
-    """Full-audio diarisation -> [(start, end, speaker_label)].
+def _probe_clips(audio: np.ndarray, s: float, e: float,
+                 sr: int = SR) -> tuple[list[np.ndarray], list[float]]:
+    """Voiced probe windows inside ``[s, e]`` plus their centre times.
 
-    ``threshold`` acts as a bias on top of the recording's own adaptive threshold:
-    leaving it at the default means "auto", nudging it means "stricter/looser
-    than auto".
+    Unvoiced probes are dropped before embedding: a silent 0.9 s window yields an
+    embedding that matches nothing, which would look exactly like a speaker
+    change.
+    """
+    span = audio[int(s * sr):int(e * sr)]
+    if span.size < int(PROBE_WIN * sr):
+        return [], []
+    energy = frame_energy(span)
+    floor = max(0.004, float(np.percentile(energy, 60)) * 0.35) if energy.size else 0.004
+
+    win = int(PROBE_WIN * sr)
+    hop = int(PROBE_HOP * sr)
+    clips: list[np.ndarray] = []
+    times: list[float] = []
+    for st in range(0, span.size - win + 1, hop):
+        clip = span[st:st + win]
+        if float(np.sqrt(np.mean(clip ** 2))) < floor:
+            continue
+        clips.append(clip)
+        times.append((s * sr + st + win / 2) / sr)
+    return clips, times
+
+
+def _snap_to_quiet(audio: np.ndarray, t: float, sr: int, search: float = 0.35) -> float:
+    """Move a cut to the quietest 20 ms frame nearby.
+
+    A probe grid puts the boundary within ±0.45 s of the truth, and the truth is
+    usually the pause between two utterances. Snapping there avoids slicing a word
+    in half, which is what makes the speaker change look abrupt in the transcript.
+    """
+    lo = max(0, int((t - search) * sr))
+    hi = min(audio.size, int((t + search) * sr))
+    if hi - lo < int(0.04 * sr):
+        return t
+    seg = audio[lo:hi]
+    energy = frame_energy(seg)
+    if energy.size == 0:
+        return t
+    idx = int(np.argmin(energy))
+    snapped = (lo + idx * HOP + FRAME / 2) / sr
+    # Only accept the snap when it really is quieter than a voiced frame;
+    # otherwise keep the probe-derived point.
+    if float(energy[idx]) <= float(np.percentile(energy, 25)):
+        return snapped
+    return t
+
+
+def _cuts_on_curve(s: float, e: float, times: list[float],
+                   embs: list[np.ndarray | None],
+                   audio: np.ndarray | None = None,
+                   sr: int = SR) -> list[float]:
+    """Cut points where the voice on the left stops matching the voice on the right.
+
+    Comparing *adjacent* probes does not work: when a turn falls between two probe
+    windows, both straddle the change and each still scores ~0.56-0.59, above any
+    useful threshold. Comparing the mean of the ``LOCAL_PROBES`` windows on each
+    side of every probe boundary is the statistic that separates them — measured on
+    the synthetic take, the same-speaker floor is ~0.61 and a real change scores
+    0.24-0.37 at two neighbouring positions.
+    """
+    n = len(embs)
+    w = LOCAL_PROBES
+    if n < 2 * w + 1:
+        return []
+
+    def local_mean(lo: int, hi: int) -> np.ndarray | None:
+        picked: list[np.ndarray] = []
+        for k in range(max(lo, 0), min(hi, n)):
+            v = embs[k]
+            if v is not None:
+                picked.append(v)
+        if len(picked) < 2:
+            return None
+        c = np.mean(np.vstack(picked), axis=0)
+        norm = float(np.linalg.norm(c))
+        return c / norm if norm > 1e-9 else None
+
+    candidates: list[tuple[float, float]] = []
+    for k in range(w, n - w + 1):
+        left = local_mean(k - w, k)
+        right = local_mean(k, k + w)
+        if left is None or right is None:
+            continue
+        t = (times[k - 1] + times[k]) / 2
+        if t - s < REFINE_MIN_PIECE or e - t < REFINE_MIN_PIECE:
+            continue
+        score = float(np.dot(left, right))
+        if score < CHANGE_SIM:
+            candidates.append((score, t))
+
+    cuts: list[float] = []
+    # How many turns fit in this span: a 15 s merged span can legitimately hold
+    # five changes, a 3 s one cannot. The piece-length rule below still keeps
+    # every surviving piece at least REFINE_MIN_PIECE long.
+    limit = min(MAX_CUTS, max(2, int((e - s) / 2.0)))
+    for _score, t in sorted(candidates):
+        if any(abs(t - c) < REFINE_MIN_PIECE for c in cuts):
+            continue
+        cuts.append(_snap_to_quiet(audio, t, sr) if audio is not None else t)
+        if len(cuts) >= limit:
+            break
+    return sorted(cuts)
+
+
+def _dedupe_units(units: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Make spans monotonic and non-overlapping.
+
+    VAD chops a long continuous speech run with a 0.2 s overlap, so two spans (and
+    therefore two groups) can cover the same audio. Overlapping spans double-count
+    speech: the same 0.2 s is scored twice and the text split across both windows
+    gets a share it does not have. Clamping each start to the previous end costs
+    nothing and keeps every downstream consumer honest.
+    """
+    out: list[tuple[float, float]] = []
+    for s, e in sorted(units):
+        if out and s < out[-1][1]:
+            s = out[-1][1]
+        if e - s >= 0.3:
+            out.append((s, e))
+    return out
+
+
+def refine_speaker_bounds(audio: np.ndarray, groups: list[tuple[float, float]],
+                          sr: int = SR) -> list[tuple[float, float]]:
+    """Split merged spans where the speaker actually changes.
+
+    Two stages, both batched, because a per-group ONNX call per probe would make
+    diarisation of a long file slower than transcription:
+
+      1. **Quarters gate** — four equal embeddings per group, cheap. A span holding
+         one voice scores high on every adjacent pair; a span with a turn inside
+         always has a low pair somewhere. (Two halves are not enough: in a span
+         that switches A→B→A both halves are mixtures of the same two voices and
+         score as "same person".)
+      2. **Probe scan** — only for suspect spans: 0.9 s windows every 0.3 s, one
+         batched embedding call, then cut at the confirmed similarity valleys.
+
+    Over-splitting is harmless (the pieces are clustered again and usually get the
+    same label, and same-label neighbours are re-merged when windows are planned);
+    under-splitting is not, which is why the gate is generous.
+    """
+    out: list[tuple[float, float]] = []
+    candidates: list[tuple[tuple[float, float], int]] = []
+    quarter_clips: list[np.ndarray] = []
+    QUARTERS = 4
+
+    for s, e in groups:
+        if e - s < REFINE_MIN_SEC:
+            out.append((s, e))
+            continue
+        step = (e - s) / QUARTERS
+        if step < 0.6:
+            out.append((s, e))
+            continue
+        candidates.append(((s, e), len(quarter_clips)))
+        for k in range(QUARTERS):
+            quarter_clips.append(audio[int((s + k * step) * sr):int((s + (k + 1) * step) * sr)])
+
+    if not candidates:
+        return out
+
+    quarters = EMBEDDER.embed_many(quarter_clips, sr) if quarter_clips else []
+    suspects: list[tuple[float, float]] = []
+    for (s, e), base_i in candidates:
+        vecs = quarters[base_i:base_i + QUARTERS]
+        sims: list[float] = []
+        for k in range(QUARTERS - 1):
+            a, b = vecs[k], vecs[k + 1]
+            if a is None or b is None:
+                continue
+            sims.append(float(np.dot(a, b)))
+        if sims and min(sims) < CHANGE_SIM:
+            suspects.append((s, e))
+        else:
+            out.append((s, e))
+
+    if not suspects:
+        return sorted(out)
+
+    probe_clips: list[np.ndarray] = []
+    probe_owner: list[int] = []
+    probe_times: list[list[float]] = []
+    for gi, (s, e) in enumerate(suspects):
+        clips, times = _probe_clips(audio, s, e, sr)
+        probe_clips.extend(clips)
+        probe_owner.extend([gi] * len(clips))
+        probe_times.append(times)
+
+    if not probe_clips:
+        return sorted(out + suspects)
+
+    embs = EMBEDDER.embed_many(probe_clips, sr)
+    for gi, (s, e) in enumerate(suspects):
+        idx = [k for k in range(len(probe_owner)) if probe_owner[k] == gi]
+        cuts = _cuts_on_curve(s, e, [probe_times[gi][j] for j in range(len(idx))],
+                              [embs[k] for k in idx], audio, sr) if idx else []
+        edges = [s, *cuts, e]
+        for a, b in zip(edges, edges[1:]):
+            out.append((a, b))
+    return sorted(out)
+
+
+def diarize_audio_detailed(audio: np.ndarray, sr: int = SR,
+                           threshold: float = DEFAULT_THRESHOLD,
+                           max_speakers: int = 6) -> list[dict]:
+    """Full-audio diarisation with per-span confidence.
+
+    Pipeline: VAD spans → merged groups → **boundary refinement** (a merged span
+    holding two voices is the one error clustering cannot repair) → embeddings →
+    clustering with a margin-aware reassignment pass.
     """
     spans = vad_segments(audio, sr)
     if not spans:
         return []
-    groups, mapping = _group_spans(spans)
-    clips = [audio[int(s * sr):int(e * sr)] for s, e in groups]
+    groups, _mapping = _group_spans(spans)
+    units = _dedupe_units(refine_speaker_bounds(audio, groups, sr) or groups)
+
+    clips = [audio[int(s * sr):int(e * sr)] for s, e in units]
     embs = EMBEDDER.embed_many(clips, sr)
-    durations = [e - s for s, e in groups]
+    durations = [e - s for s, e in units]
 
     auto = adaptive_threshold(embs, durations)
     effective = float(min(0.95, max(0.55, auto + (threshold - DEFAULT_THRESHOLD))))
-    group_labels = cluster_embeddings(embs, durations, effective, max_speakers)
-    return [(s, e, group_labels[mapping[i]]) for i, (s, e) in enumerate(spans)]
+    labels, conf = cluster_with_confidence(embs, durations, effective, max_speakers)
+    return [{"start": round(s, 2), "end": round(e, 2), "speaker": labels[i],
+             "confidence": round(conf[i], 3), "duration": round(e - s, 2)}
+            for i, (s, e) in enumerate(units)]
+
+
+def diarize_audio(audio: np.ndarray, sr: int = SR,
+                  threshold: float = DEFAULT_THRESHOLD,
+                  max_speakers: int = 6) -> list[tuple[float, float, int]]:
+    """Diarisation as plain ``[(start, end, speaker_label)]`` spans."""
+    return [(d["start"], d["end"], d["speaker"])
+            for d in diarize_audio_detailed(audio, sr, threshold, max_speakers)]
+
+
+def speaker_stats(turns: list[dict], fallback_sec_per_word: float = 0.34) -> list[dict]:
+    """Talk time, turn count and share of speech per speaker.
+
+    Wall-clock time is used where the turns carry it (diarised uploads); live
+    dictation has no per-turn clock, so words are converted with a speaking-rate
+    constant rather than reporting a fake zero.
+    """
+    acc: dict[int, dict] = {}
+    for t in turns or []:
+        spk = t.get("speaker")
+        spk = -1 if spk is None else int(spk)
+        row = acc.setdefault(spk, {"speaker": spk, "seconds": 0.0, "turns": 0,
+                                   "words": 0, "estimated": False})
+        row["turns"] += 1
+        words = len(str(t.get("text") or "").split())
+        row["words"] += words
+        start, end = t.get("start"), t.get("end")
+        if start is not None and end is not None and end > start:
+            row["seconds"] += float(end - start)
+        else:
+            row["seconds"] += words * fallback_sec_per_word
+            row["estimated"] = True
+    total = sum(r["seconds"] for r in acc.values()) or 1.0
+    rows = sorted(acc.values(), key=lambda r: r["seconds"], reverse=True)
+    for r in rows:
+        r["seconds"] = round(r["seconds"], 1)
+        r["share"] = round(r["seconds"] / total, 3)
+    return rows
 
 
 def describe_status() -> dict:

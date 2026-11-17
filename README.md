@@ -266,18 +266,34 @@ from the text model. Plain CPU code — no CUDA, no Metal requirement.
 
 1. **VAD** — short-time energy with an adaptive noise floor splits audio into
    utterances at pauses.
-2. **Embedding** — L2-normalised 256-d voiceprint per utterance (Kaldi-style 80-bin
+2. **Boundary refinement** — a turn change with less than 250 ms of silence lands
+   in one VAD span, and one label then covers two people. Merged spans get a cheap
+   four-quarter check, and the suspect ones a 0.9 s / 0.3 s probe scan; cuts are
+   placed where the local voiceprint on the left stops matching the right and then
+   snapped to the quietest nearby frame. Measured on a synthetic take: the three
+   true turn boundaries were recovered within 60 ms, with same-speaker probe
+   similarity ≥0.61 versus 0.24–0.37 across a change.
+3. **Embedding** — L2-normalised 256-d voiceprint per unit (Kaldi-style 80-bin
    fbank, 16 kHz, per-utterance mean normalisation). Measured margin on four
    synthetic voices: +0.11 cosine within-vs-across speaker.
-3. **Clustering** — average-linkage agglomerative + spherical k-means refinement,
-   hard speaker cap, pruning of tiny clusters. Spans under 0.8 s never define a
-   voice; they inherit their nearest neighbour.
-4. **Alignment** — uploads are cut into windows *at speaker turns*, so a window
+4. **Clustering** — average-linkage agglomerative, then a duration-weighted
+   reassignment pass that only moves a unit when the new centroid beats the old one
+   by 0.04 cosine (an abstain rule: a wrong label is worse than an unchanged one).
+   Hard speaker cap, pruning of clusters holding under ~2 s of speech. Units under
+   0.8 s are attached by similarity when decisive and by adjacency otherwise.
+5. **Alignment** — uploads are cut into windows *at speaker turns*, so a window
    belongs to one person by construction. Live windows can span two voices; those
    are split word-proportionally over the window's diarised spans.
 
+Every unit carries a **confidence**; the header legend shows talk time, turn count
+and that number per speaker, and drops to an amber "weak" chip below 50 %. Spans
+are clamped to be monotonic, because VAD chops long speech runs with a 0.2 s
+overlap and the same speech must not be scored twice.
+
 Live dictation uses a stable online clusterer (persistent centroids, creation-order
-labels) — re-clustering renumbered speakers mid-transcript.
+labels) — re-clustering renumbered speakers mid-transcript. A span that sits between
+"same" and "unknown" (0.45–0.78 cosine) is assigned to the closest familiar voice
+instead of creating a new speaker, and it does not move that voice's centroid.
 
 ### Text actions
 
@@ -316,7 +332,7 @@ one-time model download.
 | `POST /api/transcribe` | multipart upload → job id (progress over WS) |
 | `POST /api/transcribe-sync` | upload → finished transcript (scripts, CI) |
 | `POST /api/detect-language` | `{text}` → language, confidence, alternatives |
-| `WS /ws/jobs/{id}` | token / chunk / phase / done stream |
+| `WS /ws/jobs/{id}` | token / chunk / phase / done stream (`speaker_stats`, `speaker_confidence`, `language`) |
 | `WS /ws/live` | 24 kHz mono WAV windows in, turns + `final` out |
 | `POST /api/ai/stream` | `{action, transcript, extra, speakers}` → SSE |
 | `GET|DELETE /api/history[/*]` | transcript history |
@@ -369,6 +385,7 @@ Building the engines, packaging installers and the release pipeline:
 .venv/bin/python -m py_compile moscribe/*.py
 node --check moscribe/static/app.js
 .venv/bin/python scripts/test_diarization.py     # synthesises a 3-voice conversation
+.venv/bin/python scripts/test_diarization_advanced.py  # fast turns, live clustering, talk time
 .venv/bin/python scripts/test_langid.py          # 30-language fixtures + code switching
 .venv/bin/python scripts/test_postproc.py        # loops, boilerplate, conditioning
 ```
