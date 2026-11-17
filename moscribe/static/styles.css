@@ -634,6 +634,12 @@ textarea::placeholder, input::placeholder { color: var(--faint); }
 }
 
 .turnTime { font-family: var(--mono); font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.langTag {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em;
+  padding: 1px 6px; border-radius: 999px; color: var(--spk2);
+  border: 1px solid color-mix(in srgb, var(--spk2) 32%, transparent);
+  background: color-mix(in srgb, var(--spk2) 8%, transparent);
+}
 
 .turnText {
   font-size: 15px; line-height: 1.66; color: var(--ink);

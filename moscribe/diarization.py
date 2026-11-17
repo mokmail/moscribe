@@ -437,9 +437,12 @@ def group_turns(segments: list[dict]) -> list[dict]:
             turns[-1]["text"] = tidy(f"{turns[-1]['text']} {text}")
             if seg.get("end") is not None:
                 turns[-1]["end"] = seg["end"]
+            if seg.get("lang"):
+                turns[-1]["lang"] = seg["lang"]      # newest window wins
         else:
             turns.append({"speaker": spk, "text": tidy(text),
-                          "start": seg.get("start"), "end": seg.get("end")})
+                          "start": seg.get("start"), "end": seg.get("end"),
+                          **({"lang": seg["lang"]} if seg.get("lang") else {})})
     return turns
 
 

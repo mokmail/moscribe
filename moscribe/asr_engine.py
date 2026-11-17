@@ -424,6 +424,84 @@ def write_wav(path: str | Path, samples: np.ndarray, sr: int = SAMPLE_RATE) -> N
         w.writeframes(pcm.tobytes())
 
 
+# ------------------------------------------------------------- conditioning
+
+def condition_audio(samples: np.ndarray, sr: int = SAMPLE_RATE,
+                    highpass_hz: float = 70.0,
+                    target_peak: float = 0.84,
+                    max_boost_db: float = 30.0) -> np.ndarray:
+    """Make a window easier to recognise without changing what it says.
+
+    Three problems show up on real recordings and none of them is fixable by the
+    decoder:
+
+    * **DC offset** — a cheap USB interface or a phone in a pocket adds a
+      constant term. It wastes the encoder's dynamic range and shifts every
+      frame's mean.
+    * **Rumble** — desk thumps, HVAC and traffic live below 80 Hz where speech
+      has no energy but a 24 kHz model still has mel bins. A zero-phase
+      high-pass removes it without delaying the signal, so word timestamps stay
+      aligned.
+    * **Level** — a recorder left at -30 dBFS gives the model almost no
+      contrast; a hot one clips. Both cost accuracy.
+
+    The filter is applied in the frequency domain with a raised-cosine edge: no
+    extra dependency, no group delay, and it costs a couple of milliseconds per
+    window. Returns a new float32 array; the input is not modified.
+    """
+    x = np.asarray(samples, dtype=np.float32)
+    if x.size < 64:
+        return x
+
+    x = x - float(np.mean(x))
+    if highpass_hz and highpass_hz > 0:
+        n = x.size
+        spec = np.fft.rfft(x)
+        freqs = np.fft.rfftfreq(n, d=1.0 / sr)
+        edge = max(highpass_hz * 0.6, 10.0)
+        # 0 well below the corner, 1 above it, cosine ramp in between.
+        mask = np.clip((freqs - (highpass_hz - edge)) / (2.0 * edge), 0.0, 1.0)
+        mask = 0.5 - 0.5 * np.cos(np.pi * mask)
+        x = np.fft.irfft(spec * mask, n=n).astype(np.float32)
+
+    peak = float(np.max(np.abs(x))) if x.size else 0.0
+    if peak > 1e-6:
+        gain = target_peak / peak
+        gain = min(gain, 10 ** (max_boost_db / 20.0))
+        if abs(gain - 1.0) > 0.05:
+            x = x * gain
+    return np.ascontiguousarray(np.clip(x, -1.0, 1.0), dtype=np.float32)
+
+
+def frame_rms(samples: np.ndarray, sr: int = SAMPLE_RATE, frame_ms: float = 20.0) -> np.ndarray:
+    hop = max(1, int(sr * frame_ms / 1000.0))
+    n = len(samples) // hop
+    if n < 1:
+        return np.zeros(0, dtype=np.float32)
+    frames = np.asarray(samples[: n * hop], dtype=np.float32).reshape(n, hop)
+    return np.sqrt(np.mean(frames ** 2, axis=1))
+
+
+def is_silent(samples: np.ndarray, sr: int = SAMPLE_RATE,
+              floor: float = 0.004, peak_floor: float = 0.02) -> bool:
+    """True when a window holds no speech worth sending to the decoder.
+
+    A small ASR model asked to transcribe silence does not return silence — it
+    returns "Thank you for watching" or a repeated phrase. Skipping the window
+    is both faster and more accurate than cleaning up what it invents.
+    """
+    x = np.asarray(samples, dtype=np.float32)
+    if x.size == 0:
+        return True
+    if float(np.max(np.abs(x))) < peak_floor:
+        return True
+    rms = frame_rms(x, sr)
+    if rms.size == 0:
+        return True
+    # Speech always has a handful of loud frames; a fan does not.
+    return bool(float(np.percentile(rms, 95)) < floor)
+
+
 def _quietest_boundary(audio: np.ndarray, target: int, search: int, win: int) -> int:
     start = max(0, target - search)
     end = min(len(audio), target + search)
@@ -472,14 +550,116 @@ def _words(text: str) -> list[str]:
 _PUNCT = re.compile(r"^\W+|\W+$")
 _TIGHT = re.compile(r"([.!?])([A-Z])")
 
+_TOKEN_RE = re.compile(r"[^\W\d_]", re.UNICODE)
+
+# Boilerplate the model emits on non-speech audio. Only markers that carry no
+# information are dropped — "[inaudible]" and "(unclear)" are kept on purpose,
+# because there the model is telling the reader something true.
+_ARTIFACT_MARKERS = re.compile(
+    r"\[(?:music|musik|applause|applaus|laughter|lachen|silence|silent|no speech|"
+    r"blank_audio|background noise|noise)\]|[♪♫]+", re.IGNORECASE)
+_BOILERPLATE = [
+    re.compile(r"^\s*subtitle[sd]?\s+(?:by|created by)\b.*$", re.I),
+    re.compile(r"^\s*(?:captions?|transcri(?:pt|bed))\s+by\b.*$", re.I),
+    re.compile(r"^\s*thank(?:s)?\s+(?:you\s+)?for\s+(?:watching|listening|subscribing)\b.*$", re.I),
+    re.compile(r"^\s*(?:please\s+)?(?:like|subscribe|share)\s+(?:and|&)\s+(?:subscribe|share)\b.*$", re.I),
+    re.compile(r"^\s*www\.\S+\s*$", re.I),
+]
+
+
+def strip_artifacts(text: str) -> str:
+    """Drop non-speech markers and pure-boilerplate output.
+
+    A silence window makes a small ASR model invent text — usually a caption
+    credit or "Thank you for watching". Those lines are worse than nothing, so
+    a segment consisting only of them is emptied instead of shown.
+    """
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if any(rx.match(text) for rx in _BOILERPLATE):
+        return ""
+    cleaned = _ARTIFACT_MARKERS.sub(" ", text)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" -–—")
+    # Nothing but punctuation/markers left: treat as silence, not speech.
+    if not _TOKEN_RE.search(cleaned or ""):
+        return ""
+    return cleaned
+
+
+def collapse_repeats(text: str, word_max: int = 3, phrase_max: int = 3) -> str:
+    """Kill decoder loops: "the the the the" and repeated whole fragments.
+
+    Small models get stuck, and a loop is not a transcription error a reader can
+    edit around — it buries the rest of the paragraph. A run of up to `word_max`
+    identical words is left alone (people do say "no, no, no"); a longer run is a
+    decoder loop and collapses to one word. Phrase loops keep one occurrence.
+    """
+    words = (text or "").split()
+    if len(words) < 4:
+        return text or ""
+
+    out: list[str] = []
+    i = 0
+    while i < len(words):
+        j = i + 1
+        key = _norm(words[i])
+        while j < len(words) and key and _norm(words[j]) == key:
+            j += 1
+        run = j - i
+        if run > word_max:
+            out.append(words[i])          # a loop, not emphasis
+        else:
+            out.extend(words[i:j])
+        i = j
+
+    # Phrase loops: a run of k tokens repeated back-to-back.
+    words = out
+    i = 0
+    result: list[str] = []
+    while i < len(words):
+        matched = 0
+        for k in range(2, 13):
+            if i + 2 * k > len(words):
+                break
+            a = [_norm(w) for w in words[i:i + k]]
+            b = [_norm(w) for w in words[i + k:i + 2 * k]]
+            if a == b and any(a):
+                matched = k
+        if matched:
+            # Keep the first occurrence, skip the repeats (capped at phrase_max).
+            result.extend(words[i:i + matched])
+            j = i + matched
+            reps = 1
+            while j + matched <= len(words) and \
+                    [_norm(w) for w in words[j:j + matched]] == [_norm(w) for w in words[i:i + matched]]:
+                reps += 1
+                j += matched
+                if reps > phrase_max:
+                    break
+            i = j
+        else:
+            result.append(words[i])
+            i += 1
+    return " ".join(result)
+
 
 def tidy(text: str) -> str:
-    """Insert the space the model sometimes omits after sentence punctuation.
+    """Normalise one raw model output before it is compared or displayed.
 
     ``night.Before`` tokenises as one word, which breaks overlap stitching and
-    reads badly; normalising here fixes both at once.
+    reads badly; loops and caption boilerplate are removed at the same point so
+    ``stitch_overlap`` compares clean text on both sides.
     """
-    return _TIGHT.sub(r"\1 \2", (text or "").strip())
+    text = (text or "").strip()
+    if not text:
+        return ""
+    text = strip_artifacts(text)
+    if not text:
+        return ""
+    text = collapse_repeats(text)
+    text = _TIGHT.sub(r"\1 \2", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
 
 
 def _norm(word: str) -> str:

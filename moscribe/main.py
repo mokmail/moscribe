@@ -24,12 +24,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import langid
 from .asr_engine import (
     ENGINE,
     SAMPLE_RATE,
     EngineConfig,
     EngineError,
+    condition_audio,
     decode_to_float,
+    is_silent,
     plan_chunks,
     stitch_overlap,
     tidy,
@@ -115,6 +118,10 @@ def cfg_from_form(threads: int, decoding: str, temperature: float, top_p: float,
         context=(context or "").strip(),
         prompt_format="json" if prompt_format == "json" else "text",
     )
+
+
+def _flag(value) -> bool:
+    return str(value or "").strip().lower() in ("on", "1", "true", "yes")
 
 
 def load_history() -> list[dict]:
@@ -235,7 +242,19 @@ def _websocket_impl() -> str | None:
 @app.get("/api/health")
 async def health():
     return {"ok": True, "websockets": _websocket_impl(), "engine": ENGINE.info(), "diarizer": describe_status(),
-            "text_model": LLM_ENGINE.info(), "time": time.time()}
+            "text_model": LLM_ENGINE.info(), "languages": langid.info(), "time": time.time()}
+
+
+@app.post("/api/detect-language")
+async def detect_language(payload: dict):
+    """Identify the language of arbitrary text (also used by the UI on demand)."""
+    text = str((payload or {}).get("text", ""))
+    if not text.strip():
+        return JSONResponse({"error": "empty text"}, status_code=400)
+    single = langid.detect(text)
+    sentences = [s for s in text.replace("\n", " ").split(". ") if s.strip()]
+    single["document"] = langid.merge([langid.detect(s) for s in sentences]) if len(sentences) > 1 else None
+    return single
 
 
 @app.get("/api/ai/health")
@@ -329,6 +348,8 @@ async def create_job(
     speaker_separation: str = Form("off"),
     speaker_sensitivity: float = Form(0.78),
     max_speakers: int = Form(6),
+    detect_language: str = Form("on"),
+    audio_cleanup: str = Form("on"),
 ):
     """Upload audio, split it into windows, return a job id for the WebSocket."""
     job_id = uuid.uuid4().hex[:12]
@@ -357,6 +378,12 @@ async def create_job(
     except EngineError as exc:
         shutil.rmtree(job_dir, ignore_errors=True)
         return _safe_error(exc)
+
+    cleanup = _flag(audio_cleanup)
+    if cleanup:
+        # Filtering the decoded signal (not each window) keeps the windows
+        # phase-aligned with the file, so segment timestamps stay honest.
+        audio = await asyncio.to_thread(condition_audio, audio, SAMPLE_RATE)
 
     spans = None
     if speaker_separation == "on" and EMBEDDER.available:
@@ -397,6 +424,8 @@ async def create_job(
         "spans": spans,
         "speaker_threshold": max(0.55, min(0.95, float(speaker_sensitivity))),
         "max_speakers": max(2, min(8, int(max_speakers))),
+        "detect_language": _flag(detect_language),
+        "audio_cleanup": cleanup,
     }
     return {"job_id": job_id, "duration": len(audio) / SAMPLE_RATE,
             "chunks": len(chunks), "sr": SAMPLE_RATE,
@@ -418,11 +447,14 @@ async def transcribe_sync(
     speaker_separation: str = Form("off"),
     speaker_sensitivity: float = Form(0.78),
     max_speakers: int = Form(6),
+    detect_language: str = Form("on"),
+    audio_cleanup: str = Form("on"),
 ):
     """One-shot transcription (no streaming) — handy for scripts and CI."""
     meta = await create_job(file, threads, decoding, temperature, top_p, context,
                             prompt_format, chunk_sec, overlap_sec, speaker_separation,
-                            speaker_sensitivity, max_speakers)
+                            speaker_sensitivity, max_speakers, detect_language,
+                            audio_cleanup)
     if isinstance(meta, JSONResponse):
         return meta
     job = JOBS[meta["job_id"]]
@@ -431,6 +463,7 @@ async def transcribe_sync(
     _record(job, text, segs)
     return {"text": text, "segments": segs, "turns": job.get("turns", []),
             "speakers": job.get("speakers", 0),
+            "language": job.get("language") or langid.merge([]),
             "duration": job["duration"],
             "rtf": round(total_rtf, 3), "job_id": job["id"]}
 
@@ -446,6 +479,7 @@ def _record(job: dict, text: str, segments: list[dict]) -> None:
         "duration": round(job["duration"], 2),
         "rtf": round(sum(s.get("rtf", 0) for s in segments), 3),
         "words": len(text.split()),
+        "language": job.get("language"),
         "text": text,
         "segments": segments,
     })
@@ -456,6 +490,8 @@ async def _run_job(job: dict, on_token=None, on_chunk=None,
     committed = ""
     segments: list[dict] = []
     total_rtf = 0.0
+    lang_results: list[dict] = []
+    detect_lang = bool(job.get("detect_language", True))
     for chunk in job["chunks"]:
         if should_cancel and should_cancel():
             break
@@ -464,6 +500,17 @@ async def _run_job(job: dict, on_token=None, on_chunk=None,
         async def tok(piece: str, _idx=idx):
             if on_token:
                 await on_token(_idx, piece)
+
+        # A window of silence produces invented text, not silence. Skipping it
+        # is both faster and more accurate than cleaning the hallucination up.
+        if job.get("audio_cleanup") and _chunk_is_silent(chunk["path"]):
+            seg = {"index": idx, "start": round(chunk["start"], 2),
+                   "end": round(chunk["end"], 2), "text": "", "raw": "",
+                   "speaker": chunk.get("speaker"), "silent": True}
+            segments.append(seg)
+            if on_chunk:
+                await on_chunk(seg, committed)
+            continue
 
         result = await ENGINE.transcribe(chunk["path"], job["cfg"], on_token=tok)
         raw = tidy(result.get("text", ""))
@@ -475,9 +522,20 @@ async def _run_job(job: dict, on_token=None, on_chunk=None,
         seg = {"index": idx, "start": round(chunk["start"], 2), "end": round(chunk["end"], 2),
                "text": part, "raw": raw, "speaker": chunk.get("speaker"),
                **{k: stats.get(k) for k in ("rtf", "tokens")}}
+        if detect_lang and part:
+            info = langid.detect(part)
+            lang_results.append(info)
+            if info["code"]:
+                seg["lang"] = info["code"]
+                seg["lang_conf"] = info["confidence"]
+                if info["mixed"] and info.get("secondary"):
+                    seg["lang_alt"] = info["secondary"]
         segments.append(seg)
         if on_chunk:
             await on_chunk(seg, committed)
+
+    if detect_lang:
+        job["language"] = langid.merge(lang_results)
 
     # Speaker labels: windows are already cut at speaker turns when the speaker
     # model was available, so most segments arrive labelled. Anything unlabelled
@@ -509,6 +567,14 @@ async def _run_job(job: dict, on_token=None, on_chunk=None,
                                      "start": piece["start"], "end": piece["end"]})
             segments = detailed
             turns = group_turns(segments)
+            # Language per turn, not per window: a turn holds the whole utterance,
+            # so identifying it here is both cheaper and more accurate than
+            # copying whatever the last 12-second window guessed.
+            if detect_lang:
+                for turn in turns:
+                    info = langid.detect(turn.get("text", ""))
+                    if info["code"]:
+                        turn["lang"] = info["code"]
             job["turns"] = turns
             job["speakers"] = len({t["speaker"] for t in turns if t.get("speaker", -1) >= 0})
             committed = render_turns(turns, labels=True)
@@ -516,6 +582,21 @@ async def _run_job(job: dict, on_token=None, on_chunk=None,
             job["diarization_error"] = f"{type(exc).__name__}: {exc}"
 
     return committed, segments, total_rtf
+
+
+def _chunk_is_silent(path: str | Path) -> bool:
+    """Cheap pre-check on a written chunk: skip the decoder when there is no speech."""
+    try:
+        import wave
+        with wave.open(str(path)) as w:
+            raw = w.readframes(w.getnframes())
+            width = w.getsampwidth()
+        if width != 2 or not raw:
+            return False
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        return is_silent(samples, SAMPLE_RATE)
+    except Exception:  # noqa: BLE001 - a decode hiccup must not drop a window
+        return False
 
 
 def _read_source_audio(job: dict) -> np.ndarray:
@@ -591,6 +672,7 @@ async def job_socket(ws: WebSocket, job_id: str):
     await ws.send_json({
         "type": "done", "text": text, "segments": segments,
         "turns": job.get("turns", []), "speakers": job.get("speakers", 0),
+        "language": job.get("language"),
         "duration": job["duration"], "elapsed": round(elapsed, 2),
         "rtf": round(elapsed / job["duration"], 3) if job["duration"] else None,
         "cancelled": cancel["flag"],
@@ -608,7 +690,8 @@ async def live_socket(ws: WebSocket):
     state = {"cfg": EngineConfig(threads=4, greedy=True), "committed": "",
              "seq": 0, "words": 0, "started": time.time(), "mode": "live",
              "diarize": False, "cluster": None, "elapsed": 0.0,
-             "segments": [], "spans": []}
+             "segments": [], "spans": [], "cleanup": True, "detect_lang": True,
+             "langs": []}
 
     await ws.send_json({"type": "ready", "sr": SAMPLE_RATE,
                         "engine": ENGINE.info()["state"],
@@ -624,31 +707,39 @@ async def live_socket(ws: WebSocket):
             try:
                 path.write_bytes(raw_bytes)
                 pieces: list[dict] = []
-                win_dur = 0.0
-                if state["diarize"] and state["cluster"] is not None:
+                # Decode once: both the conditioner and the diariser want the
+                # same mono 24 kHz signal, and re-reading the file is wasteful.
+                try:
+                    samples = await asyncio.to_thread(decode_to_float, path)
+                except Exception:  # noqa: BLE001 - let the engine report it
+                    samples = None
+                if samples is not None and state["cleanup"]:
+                    samples = await asyncio.to_thread(condition_audio, samples, SAMPLE_RATE)
+                    await asyncio.to_thread(write_wav, path, samples)
+                win_dur = (len(samples) / SAMPLE_RATE) if samples is not None else 0.0
+
+                # Silence never reaches the decoder: it invents text for it.
+                if samples is not None and state["cleanup"] and is_silent(samples, SAMPLE_RATE):
+                    await ws.send_json({"type": "window_done", "seq": seq, "raw": "",
+                                        "appended": "", "text": state["committed"],
+                                        "pieces": [], "turns": [], "speakers": 0,
+                                        "speaker": None, "rtf": None, "silent": True,
+                                        "lang": None})
+                    continue
+
+                if state["diarize"] and state["cluster"] is not None and samples is not None \
+                        and samples.size > SAMPLE_RATE // 2:
                     try:
-                        import wave
-                        with wave.open(str(path)) as w:
-                            raw = w.readframes(w.getnframes())
-                            width = w.getsampwidth()
-                            win_dur = w.getnframes() / w.getframerate()
-                        if width == 2:
-                            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-                        elif width == 4:
-                            samples = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
-                        else:
-                            samples = None
-                        if samples is not None and samples.size > SAMPLE_RATE // 2:
-                            spans = await asyncio.to_thread(vad_segments, samples, SAMPLE_RATE)
-                            if spans:
-                                clips = [samples[int(a * SAMPLE_RATE):int(b * SAMPLE_RATE)]
-                                         for a, b in spans]
-                                embs = await asyncio.to_thread(EMBEDDER.embed_many, clips, SAMPLE_RATE)
-                                local = []
-                                for (a, b), emb in zip(spans, embs):
-                                    lab = state["cluster"].add(emb, b - a)
-                                    local.append((a, b, lab))
-                                state["spans"] = local
+                        spans = await asyncio.to_thread(vad_segments, samples, SAMPLE_RATE)
+                        if spans:
+                            clips = [samples[int(a * SAMPLE_RATE):int(b * SAMPLE_RATE)]
+                                     for a, b in spans]
+                            embs = await asyncio.to_thread(EMBEDDER.embed_many, clips, SAMPLE_RATE)
+                            local = []
+                            for (a, b), emb in zip(spans, embs):
+                                lab = state["cluster"].add(emb, b - a)
+                                local.append((a, b, lab))
+                            state["spans"] = local
                     except Exception:  # noqa: BLE001 - diarisation is best-effort
                         state["spans"] = []
 
@@ -658,6 +749,14 @@ async def live_socket(ws: WebSocket):
                 raw = tidy(result.get("text", ""))
                 part = stitch_overlap(state["committed"], raw) if state["committed"] else raw
                 part = tidy(part)
+                lang = None
+                if state["detect_lang"] and part:
+                    info = langid.detect(part)
+                    if info["code"]:
+                        state["langs"].append(info)
+                        lang = {"code": info["code"], "name": info["name"],
+                                "confidence": info["confidence"],
+                                "mixed": info["mixed"], "secondary": info["secondary"]}
                 if part:
                     state["committed"] = (state["committed"] + " " + part).strip()
                     state["words"] += len(part.split())
@@ -667,7 +766,10 @@ async def live_socket(ws: WebSocket):
                         pieces = [{"speaker": -1, "text": part,
                                    "start": round(state["elapsed"], 2), "end": None}]
                     for pc in pieces:
-                        state["segments"].append({**pc, "window": seq})
+                        pc = {**pc, "window": seq}
+                        if lang:
+                            pc["lang"] = lang["code"]
+                        state["segments"].append(pc)
 
                 turns = group_turns(state["segments"]) if state["diarize"] else []
                 text = render_turns(turns, labels=True) if turns else state["committed"]
@@ -677,6 +779,8 @@ async def live_socket(ws: WebSocket):
                     "speakers": state["cluster"].speaker_count if state["cluster"] else 0,
                     "speaker": pieces[0]["speaker"] if pieces else None,
                     "rtf": (result.get("stats") or {}).get("rtf"),
+                    "lang": lang,
+                    "language": langid.merge(state["langs"]),
                 })
             except EngineError as exc:
                 await ws.send_json({"type": "error", "seq": seq, "message": str(exc)})
@@ -715,6 +819,8 @@ async def live_socket(ws: WebSocket):
                         float(data.get("temperature", 0.7)), float(data.get("top_p", 0.9)),
                         data.get("context", ""), data.get("prompt_format", "text"))
                     state["diarize"] = data.get("speaker_separation") == "on"
+                    state["cleanup"] = str(data.get("audio_cleanup", "on")).lower() in ("on", "1", "true", "yes")
+                    state["detect_lang"] = str(data.get("detect_language", "on")).lower() in ("on", "1", "true", "yes")
                     threshold = max(0.55, min(0.95, float(data.get("speaker_sensitivity", DEFAULT_THRESHOLD))))
                     max_spk = max(2, min(8, int(data.get("max_speakers", 6))))
                     if state["diarize"]:
@@ -733,6 +839,7 @@ async def live_socket(ws: WebSocket):
                     state["words"] = 0
                     state["segments"] = []
                     state["spans"] = []
+                    state["langs"] = []
                     state["elapsed"] = 0.0
                     if state["cluster"] is not None:
                         state["cluster"] = SpeakerCluster(
@@ -756,6 +863,7 @@ async def live_socket(ws: WebSocket):
                         "type": "final", "text": text, "turns": turns,
                         "speakers": state["cluster"].speaker_count if state["cluster"] else 0,
                         "windows": state["seq"], "words": len(text.split()),
+                        "language": langid.merge(state["langs"]),
                         "duration": round(time.time() - state["started"], 1),
                     })
                     break
@@ -771,6 +879,7 @@ async def live_socket(ws: WebSocket):
                 "mode": "live", "created": state["started"],
                 "duration": round(time.time() - state["started"], 1),
                 "rtf": None, "words": len(text.split()), "text": text,
+                "language": langid.merge(state["langs"]),
                 "segments": state["segments"], "turns": turns,
                 "speakers": len({t["speaker"] for t in turns if t.get("speaker", -1) >= 0}),
             })

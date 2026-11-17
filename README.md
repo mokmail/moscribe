@@ -219,6 +219,10 @@ Start it (`moscribe`, or the app icon); it opens `http://127.0.0.1:8770`.
   extra; compressed formats use `ffmpeg` if it is installed.
 - **Speakers** — WeSpeaker voiceprints plus clustering give each voice a colour and
   a name you can rename inline; names carry into copy/export.
+- **Language** — every window is identified from its script and closed-class words
+  (33 languages, no model download). A recording that switches language is reported
+  as *German + English* rather than filed under one, and each turn that differs is
+  tagged inline. Confidence is shown, never hidden.
 - **Prompts** — ten presets (meeting, stand-up, interview, lecture, Austrian public
   sector, clinical, legal, support, podcast, workshop) or your own context, to bias
   recognition toward names and jargon.
@@ -311,6 +315,7 @@ one-time model download.
 | `POST /api/engine/warmup` | load models ahead of the first request |
 | `POST /api/transcribe` | multipart upload → job id (progress over WS) |
 | `POST /api/transcribe-sync` | upload → finished transcript (scripts, CI) |
+| `POST /api/detect-language` | `{text}` → language, confidence, alternatives |
 | `WS /ws/jobs/{id}` | token / chunk / phase / done stream |
 | `WS /ws/live` | 24 kHz mono WAV windows in, turns + `final` out |
 | `POST /api/ai/stream` | `{action, transcript, extra, speakers}` → SSE |
@@ -319,7 +324,9 @@ one-time model download.
 Form fields (`/api/transcribe`, `/api/transcribe-sync`): `threads`, `decoding`
 (`greedy`|`sampling`), `temperature`, `top_p`, `context`, `prompt_format`
 (`text`|`json`), `chunk_sec`, `overlap_sec`, `speaker_separation` (`on`|`off`),
-`speaker_sensitivity` (0.55–0.95, default 0.78), `max_speakers` (2–8, default 6).
+`speaker_sensitivity` (0.55–0.95, default 0.78), `max_speakers` (2–8, default 6),
+`detect_language` (`on`|`off`, default `on`), `audio_cleanup` (`on`|`off`, default
+`on` — DC removal, 70 Hz high-pass, level normalisation, silent-window skip).
 
 ## Configuration
 
@@ -346,7 +353,8 @@ Frontend is `moscribe/static/` — plain HTML/CSS/JS, no bundler, no npm. Backen
 | File | Role |
 | --- | --- |
 | `main.py` | routes, job runner, live WebSocket |
-| `asr_engine.py` | supervises `asr_stream_server`, chunk planning, stitching |
+| `asr_engine.py` | supervises `asr_stream_server`, chunk planning, conditioning, stitching |
+| `langid.py` | script + function-word language identification, document rollup |
 | `diarization.py` | VAD, span grouping, clustering, turn building |
 | `spk_embed.py` | WeSpeaker ONNX embedder (Kaldi-style fbank) |
 | `llm.py` | supervises `llama-server`, prompt templates per action |
@@ -361,6 +369,8 @@ Building the engines, packaging installers and the release pipeline:
 .venv/bin/python -m py_compile moscribe/*.py
 node --check moscribe/static/app.js
 .venv/bin/python scripts/test_diarization.py     # synthesises a 3-voice conversation
+.venv/bin/python scripts/test_langid.py          # 30-language fixtures + code switching
+.venv/bin/python scripts/test_postproc.py        # loops, boilerplate, conditioning
 ```
 
 ## License

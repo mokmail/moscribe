@@ -17,6 +17,17 @@
   const SPK_COLORS = ["var(--spk0)", "var(--spk1)", "var(--spk2)",
                       "var(--spk3)", "var(--spk4)", "var(--spk5)"];
 
+  // Mirrors moscribe/langid.py LANGUAGES — only used for display.
+  const LANG_NAMES = {
+    en: "English", de: "German", fr: "French", es: "Spanish", it: "Italian",
+    pt: "Portuguese", nl: "Dutch", sv: "Swedish", da: "Danish", nb: "Norwegian",
+    fi: "Finnish", pl: "Polish", cs: "Czech", sk: "Slovak", hu: "Hungarian",
+    ro: "Romanian", tr: "Turkish", id: "Indonesian", hr: "Croatian", sl: "Slovenian",
+    ru: "Russian", uk: "Ukrainian", bg: "Bulgarian", sr: "Serbian", el: "Greek",
+    ar: "Arabic", fa: "Persian", he: "Hebrew", hi: "Hindi", th: "Thai",
+    zh: "Chinese", ja: "Japanese", ko: "Korean",
+  };
+
   /* ------------------------------------------------------------- state */
 
   const DEFAULTS = {
@@ -33,6 +44,8 @@
     layout: "auto",
     sensitivity: 0.78,
     maxSpeakers: 6,
+    langDetect: "on",
+    audioCleanup: "on",
   };
 
   // Context presets. This field is *biasing context* for the ASR, not an
@@ -128,6 +141,7 @@
     jobSocket: null,
     follow: true,
     health: null,
+    language: null,
     mic: {
       active: false, ctx: null, stream: null, node: null, gain: null, ws: null,
       buf: [], bufLen: 0, inflight: false, firstWindow: true, t0: 0,
@@ -181,6 +195,8 @@
       speaker_separation: settings.speakerSep,
       speaker_sensitivity: settings.sensitivity,
       max_speakers: settings.maxSpeakers,
+      detect_language: settings.langDetect,
+      audio_cleanup: settings.audioCleanup,
     };
   }
 
@@ -365,7 +381,8 @@
 
     for (let i = 0; i < S.turns.length; i++) {
       const turn = S.turns[i];
-      const sig = `${turn.speaker}|${turn.start}|${query}`;
+      const langSig = S.language ? `${S.language.code}:${S.language.mixed ? 1 : 0}` : "-";
+      const sig = `${turn.speaker}|${turn.start}|${turn.lang || ""}|${langSig}|${query}`;
       let rec = dom.turns[i];
       if (!rec) {
         const node = createTurn(turn);
@@ -430,6 +447,11 @@
     hint.hidden = true;
     head.appendChild(hint);
 
+    const lang = document.createElement("span");
+    lang.className = "langTag";
+    lang.hidden = true;
+    head.appendChild(lang);
+
     const time = document.createElement("span");
     time.className = "turnTime";
     head.appendChild(time);
@@ -469,6 +491,17 @@
     }
     el.querySelector(".turnTime").textContent = turn.start != null ? fmtStamp(turn.start) : "";
     el.querySelector(".turnText").style.setProperty("--c", colour);
+
+    // A turn is tagged only when it disagrees with the recording's language —
+    // a chip on every line would be noise, and mixed files are where it matters.
+    const tag = el.querySelector(".langTag");
+    const doc = S.language;
+    const off = turn.lang && (!doc || doc.mixed || doc.code !== turn.lang);
+    tag.hidden = !off;
+    if (off) {
+      tag.textContent = turn.lang.toUpperCase();
+      tag.title = `${LANG_NAMES[turn.lang] || turn.lang} here — recording is ${doc ? doc.name : "unknown"}`;
+    }
     paintText(el, turn.text, query);
   }
 
@@ -547,6 +580,7 @@
     const bits = [];
     if (dur) bits.push(fmtTime(dur));
     if (speakers) bits.push(`${speakers} speaker${speakers === 1 ? "" : "s"}`);
+    if (S.language) bits.push(languageLabel(S.language));
     bits.push(`${S.turns.length || 1} turn${S.turns.length === 1 ? "" : "s"}`);
     meta.textContent = bits.join(" · ");
   }
@@ -599,6 +633,8 @@
     S.rtf = null;
     S.names = {};
     S.currentChunk = -1;
+    S.language = null;
+    renderLanguage(null);
     $("docTitle").textContent = "Untitled session";
     delete $("docMeta").dataset.custom;
     $("docMeta").textContent = "Nothing transcribed yet";
@@ -785,10 +821,21 @@
         if (!settings.speakerSep || settings.speakerSep === "off") S.turns = [];
         S.rtf = m.rtf || S.rtf;
         S.duration = m.duration || S.duration;
+        if (m.language) renderLanguage(m.language);
         $("progressFill").style.width = "100%";
         $("jobProgress").textContent = m.cancelled
           ? "stopped"
           : `done in ${m.elapsed}s · ${m.speakers || 0} speaker(s)`;
+        // The subtitle must describe what is on screen; resetSession() cleared it.
+        if (m.duration || S.turns.length || S.committed) {
+          const bits = [];
+          if (m.duration) bits.push(fmtTime(m.duration));
+          if (m.speakers) bits.push(`${m.speakers} speaker${m.speakers === 1 ? "" : "s"}`);
+          if (S.language) bits.push(languageLabel(S.language));
+          if (S.turns.length) bits.push(`${S.turns.length} turn${S.turns.length === 1 ? "" : "s"}`);
+          $("docMeta").textContent = bits.join(" · ");
+          $("docMeta").dataset.custom = "1";
+        }
         setPhase(m.cancelled ? "stopped" : "ready");
         render();
         S.follow = false;
@@ -823,8 +870,9 @@
       if (last && last.speaker === spk) {
         last.text = `${last.text} ${text}`.trim();
         if (s.end != null) last.end = s.end;
+        if (s.lang) last.lang = s.lang;      // the newest window wins
       } else {
-        turns.push({ speaker: spk, text, start: s.start, end: s.end });
+        turns.push({ speaker: spk, text, start: s.start, end: s.end, lang: s.lang || null });
       }
     });
     return turns;
@@ -1015,13 +1063,14 @@
           S.committed = msg.text || S.committed;
           if (msg.appended) {
             S.segments.push({ index: msg.seq, text: msg.appended, speaker: msg.speaker,
-                              start: null, end: null });
+                              start: null, end: null, lang: msg.lang ? msg.lang.code : null });
             S.turns = buildTurns(S.segments);
           }
         }
         if (!settings.speakerSep || settings.speakerSep === "off") S.turns = [];
         if (msg.rtf) S.rtf = msg.rtf;
         S.duration = (Date.now() - m.t0) / 1000;
+        if (msg.language) renderLanguage(msg.language);
         render();
         m.inflight = false;
         if (m.active) maybeFlushWindow();
@@ -1034,12 +1083,14 @@
         }
         if (!settings.speakerSep || settings.speakerSep === "off") S.turns = [];
         if (msg.duration) S.duration = msg.duration;
+        if (msg.language) renderLanguage(msg.language);
         setFinishing(false);
         $("micHint").textContent = "Tap the mic and start talking";
         setPhase("ready");
         render();
         S.follow = false;
-        toast(`Transcript complete · ${msg.words || 0} words`);
+        const langNote = S.language ? ` · ${S.language.name}` : "";
+        toast(`Transcript complete · ${msg.words || 0} words${langNote}`);
         setTimeout(loadHistory, 400);
       } else if (msg.type === "error") {
         toast(msg.message, true);
@@ -1506,7 +1557,7 @@
         const secs = it.duration ? Math.round(it.duration % 60) : 0;
         el.innerHTML = `<button class="hDel" title="Delete">✕</button>
           <div class="hTitle"></div>
-          <div class="hMeta">${it.mode === "live" ? "live" : "file"} · ${mins}:${String(secs).padStart(2, "0")} · ${it.words || 0} w${it.speakers ? ` · ${it.speakers} spk` : ""}${it.rtf ? ` · RTF ${it.rtf}` : ""}</div>`;
+          <div class="hMeta">${it.mode === "live" ? "live" : "file"} · ${mins}:${String(secs).padStart(2, "0")} · ${it.words || 0} w${it.speakers ? ` · ${it.speakers} spk` : ""}${it.rtf ? ` · RTF ${it.rtf}` : ""}${it.language && it.language.code ? ` · ${languageLabel(it.language)}` : ""}</div>`;
         el.querySelector(".hTitle").textContent = it.title || "transcript";
         el.onclick = () => {
           resetSession();
@@ -1519,6 +1570,7 @@
           }
           S.duration = it.duration || 0;
           S.rtf = it.rtf || null;
+          renderLanguage(it.language || null);
           $("docTitle").textContent = it.title || "transcript";
           $("docMeta").textContent = `${it.mode === "live" ? "live dictation" : "uploaded file"} · ${new Date((it.created || 0) * 1000).toLocaleString()}`;
           render();
@@ -1634,10 +1686,13 @@
       blob = new Blob([text + "\n"], { type: "text/plain;charset=utf-8" });
       name = `${base}.txt`;
     } else if (fmt === "md") {
+      const langLine = S.language
+        ? `**Language:** ${S.language.name}${S.language.mixed && S.language.secondary ? ` + ${LANG_NAMES[S.language.secondary] || S.language.secondary}` : ""} · ${Math.round((S.language.confidence || 0) * 100)}% confident\n\n`
+        : "";
       const body = S.turns.length
-        ? `# ${$("docTitle").textContent}\n\n` +
+        ? `# ${$("docTitle").textContent}\n\n${langLine}` +
           S.turns.map((t) => `**${speakerLabel(t.speaker)}** · ${fmtStamp(t.start)}\n\n${t.text}\n`).join("\n")
-        : `# ${$("docTitle").textContent}\n\n${text}\n`;
+        : `# ${$("docTitle").textContent}\n\n${langLine}${text}\n`;
       blob = new Blob([body], { type: "text/markdown;charset=utf-8" });
       name = `${base}.md`;
     } else if (fmt === "srt") {
@@ -1653,6 +1708,7 @@
     } else {
       blob = new Blob([JSON.stringify({
         text, duration: S.duration, rtf: S.rtf, mode: S.mode,
+        language: S.language,
         speakers: S.turns.length ? [...new Set(S.turns.map((t) => t.speaker))].filter((s) => s >= 0) : [],
         names: S.names, turns: S.turns, segments: S.segments,
         created: new Date().toISOString(),
@@ -1821,6 +1877,40 @@
     }
   }
 
+  /* ----------------------------------------------------------- language */
+
+  // The pill is the only place a reader learns what language the file was in.
+  // Confidence is shown, not hidden: for a short clip "Spanish?" is useful,
+  // a confident wrong "Portuguese" is not.
+  function languageLabel(lang) {
+    if (!lang || !lang.code) return "";
+    const name = lang.name || LANG_NAMES[lang.code] || String(lang.code).toUpperCase();
+    return lang.mixed && lang.secondary
+      ? `${name} + ${LANG_NAMES[lang.secondary] || lang.secondary}`
+      : name;
+  }
+
+  function renderLanguage(lang) {
+    const pill = $("pillLang");
+    if (!pill) return;
+    S.language = lang && lang.code ? lang : null;
+    if (!S.language) {
+      pill.dataset.state = "idle";
+      pill.querySelector("em").textContent = "—";
+      pill.title = settings.langDetect === "on"
+        ? "Language is identified as soon as text arrives"
+        : "Language detection is off (Settings → Recognition)";
+      return;
+    }
+    const label = languageLabel(lang);
+    pill.dataset.state = lang.confidence >= 0.55 ? "ok" : (lang.confidence >= 0.35 ? "warn" : "idle");
+    pill.querySelector("em").textContent = label;
+    const pct = Math.round((lang.confidence || 0) * 100);
+    const alts = (lang.languages || []).filter((l) => l.code !== lang.code)
+      .map((l) => `${LANG_NAMES[l.code] || l.code} ${Math.round(l.share * 100)}%`).join(", ");
+    pill.title = `${label} — ${pct}% confident${alts ? ` · also: ${alts}` : ""}`;
+  }
+
   function applyPreset(preset) {
     if (!preset) {
       settings.context = "";
@@ -1881,6 +1971,8 @@
     $("sensVal").textContent = sensLabel(settings.sensitivity);
     $("spkToggle").setAttribute("aria-checked", String(settings.speakerSep === "on"));
     $("spkFields").classList.toggle("hidden", settings.speakerSep !== "on");
+    $("langToggle").setAttribute("aria-checked", String(settings.langDetect === "on"));
+    $("cleanupToggle").setAttribute("aria-checked", String(settings.audioCleanup === "on"));
 
     document.querySelectorAll(".seg2[data-decoding]").forEach((b) => {
       b.classList.toggle("active", b.dataset.decoding === settings.decoding);
@@ -1945,6 +2037,29 @@
       settings.maxSpeakers = Number(e.target.value);
       $("maxSpkVal").textContent = settings.maxSpeakers;
       saveSettings();
+    };
+
+    $("langToggle").onclick = () => {
+      settings.langDetect = settings.langDetect === "on" ? "off" : "on";
+      $("langToggle").setAttribute("aria-checked", String(settings.langDetect === "on"));
+      saveSettings();
+      if (settings.langDetect === "off") {
+        // Keep the text; drop the claim. A stale language label on a file that
+        // was never analysed is worse than none.
+        renderLanguage(null);
+        render();
+      }
+      pushLiveConfig();
+      toast(settings.langDetect === "on" ? "Language detection on" : "Language detection off");
+    };
+    $("cleanupToggle").onclick = () => {
+      settings.audioCleanup = settings.audioCleanup === "on" ? "off" : "on";
+      $("cleanupToggle").setAttribute("aria-checked", String(settings.audioCleanup === "on"));
+      saveSettings();
+      pushLiveConfig();
+      toast(settings.audioCleanup === "on"
+        ? "Audio cleanup on — rumble filtered, silent windows skipped"
+        : "Audio cleanup off — raw windows go to the decoder");
     };
 
     // settings drawer

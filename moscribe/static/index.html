@@ -33,6 +33,7 @@
       <b class="dots" aria-hidden="true"><em>.</em><em>.</em><em>.</em></b>
     </span>
     <span class="pill" id="pillPrompt" data-state="idle" title="Prompt / context applied to the next transcription"><i></i><b>prompt</b><em>none</em></span>
+    <span class="pill" id="pillLang" data-state="idle" title="Language identified from the transcript"><i></i><b>language</b><em>—</em></span>
   </div>
 
   <div class="topActions">
@@ -297,6 +298,19 @@
             <div class="fieldRow"><span class="fieldLabel">Top-p</span><output id="topPVal">0.90</output></div>
             <input type="range" id="topP" min="0.1" max="1" step="0.05" value="0.9" />
           </div>
+          <div class="group">
+            <h3>Language &amp; audio</h3>
+            <div class="fieldRow">
+              <span class="fieldLabel">Detect language</span>
+              <button class="switch" id="langToggle" role="switch" aria-checked="true" aria-label="Detect language"><span></span></button>
+            </div>
+            <p class="fine">Every window is identified from its script and function words — no model download. A window that switches language is labelled with both.</p>
+            <div class="fieldRow">
+              <span class="fieldLabel">Audio cleanup</span>
+              <button class="switch" id="cleanupToggle" role="switch" aria-checked="true" aria-label="Clean up audio"><span></span></button>
+            </div>
+            <p class="fine">Removes DC offset and sub-70 Hz rumble and normalises each window before decoding. A window with no speech is skipped instead of being transcribed as "Thank you for watching".</p>
+          </div>
     </section>
 
     <section class="tabPane hidden" data-pane="model" role="tabpanel">
@@ -393,11 +407,14 @@
           <p>WeSpeaker ResNet34 turns each utterance into a 256-dimension voiceprint; clustering groups them into speakers. Uploads are cut at speaker turns, so a label is right by construction.</p></li>
         <li><span class="pipeDot" style="--c:#ec4899">3</span>
           <strong>Recognition</strong>
-          <p>VibeASR.cpp — VibeVoice-ASR-BitNet, 1.58 GB, I8_S encoder and I2_S language model — transcribes each window on the CPU, faster than real time.</p></li>
-        <li><span class="pipeDot" style="--c:#f59e0b">4</span>
+          <p>Each window is DC-corrected, high-passed at 70 Hz and level-normalised first, then VibeASR.cpp — VibeVoice-ASR-BitNet, 1.58 GB — transcribes it on the CPU, faster than real time. Windows with no speech are skipped rather than invented.</p></li>
+        <li><span class="pipeDot" style="--c:#8b5cf6">4</span>
+          <strong>Language</strong>
+          <p>Every window's text is identified from its script and closed-class words (30 languages). A recording that switches language is reported as mixed instead of being filed under one.</p></li>
+        <li><span class="pipeDot" style="--c:#f59e0b">5</span>
           <strong>Stitching</strong>
-          <p>Overlapping windows are merged with a sliding matcher that tolerates transcription drift at the seams, so a sentence is never printed twice.</p></li>
-        <li><span class="pipeDot" style="--c:#0ea5e9">5</span>
+          <p>Overlapping windows are merged with a sliding matcher that tolerates transcription drift at the seams, so a sentence is never printed twice. Decoder loops and caption boilerplate are removed.</p></li>
+        <li><span class="pipeDot" style="--c:#0ea5e9">6</span>
           <strong>Thinking</strong>
           <p>BitNet b1.58 2B-4T, served by llama.cpp, writes summaries, minutes and action items. It reads only your transcript and runs on the same machine.</p></li>
       </ol>
@@ -410,6 +427,7 @@
         <article><h3>Upload</h3><p>Drop a wav, mp3, m4a, flac, ogg or mp4. Windows are planned at speaker turns and transcribed in order; the progress bar counts them.</p></article>
         <article><h3>Speakers</h3><p>Each voice gets a colour and a name. Click a name to rename it — the change carries into copy and export. Names the app hears in an introduction ("my name is Anna") are offered as a suggestion, never applied silently.</p></article>
         <article><h3>Prompts</h3><p>Context biases recognition toward names and jargon. Pick a preset (meeting, clinical, legal, Amtsdeutsch…) or write your own, then apply it. The active prompt is shown as a tag.</p></article>
+        <article><h3>Language</h3><p>The language pill shows what was identified and how sure the app is. A mixed recording names both languages, and a turn that switches language is tagged inline. Detection runs on the transcript text, so it never slows transcription down.</p></article>
         <article><h3>AI actions</h3><p>Summarize, Minutes, Action items, Clean up, translate, or ask your own question. Results stream in the side panel and can be copied, downloaded as .txt/.md/.json, mailed, or shared.</p></article>
         <article><h3>Models</h3><p>Settings → Model picks any GGUF in <code>models/llm/</code> and exposes threads, context, temperature, output length and repeat penalty. Applying reloads the model and reports the load time.</p></article>
       </div>
